@@ -18,7 +18,8 @@ import {
 } from './board';
 import { ITEMS, useItem, type Inventory } from './items';
 import { nextRand } from './rng';
-import { gainExp, type Unit } from './units';
+import { SKILLS, skillRange, type SkillDef } from './skills';
+import { CLASSES, gainExp, type Unit } from './units';
 
 export type BattleResult = 'win' | 'lose' | null;
 
@@ -74,7 +75,7 @@ export function createBattle(
   foes: Unit[],
   items: Inventory,
 ): BattleState {
-  const units = [...allies, ...foes].map((u) => ({ ...u, acted: false, buffAtk: 0 }));
+  const units = [...allies, ...foes].map((u) => ({ ...u, acted: false, buffAtk: 0, cd: 0 }));
   const s: BattleState = {
     board,
     units,
@@ -107,9 +108,9 @@ export function baseDamage(board: Board, attacker: Unit, defender: Unit): number
   return Math.max(1, raw);
 }
 
-// UI용 예상 피해 (±10% 폭을 그대로 보여 준다)
-export function previewDamage(board: Board, attacker: Unit, defender: Unit) {
-  const b = baseDamage(board, attacker, defender);
+// UI용 예상 피해 (±10% 폭을 그대로 보여 준다). mul은 스킬 배수 — 미리보기와 판정이 같은 식.
+export function previewDamage(board: Board, attacker: Unit, defender: Unit, mul = 1) {
+  const b = baseDamage(board, attacker, defender) * mul;
   return { min: Math.max(1, Math.round(b * 0.9)), max: Math.round(b * 1.1) };
 }
 
@@ -155,6 +156,96 @@ export function itemTargets(s: BattleState, u: Unit, itemId: string): Unit[] {
     const sideOk = def.target === 'ally' ? t.side === u.side : t.side !== u.side;
     return sideOk && dist(u.x, u.y, t.x, t.y) <= def.range;
   });
+}
+
+// ── 특기(스킬)
+/** 이 유닛이 지금 특기를 쓸 수 있는가 (배운 게 있고, 쿨다운이 돌았고, 맞을 대상이 있는가) */
+export function canUseSkill(s: BattleState, u: Unit): boolean {
+  const def = skillOf(u);
+  if (!def || u.cd > 0) return false;
+  if (def.healMul) return healTargets(s, u).length > 0;
+  return skillTargets(s, u).length > 0;
+}
+
+export const skillOf = (u: Unit): SkillDef | null => (u.skill ? SKILLS[u.skill] : null);
+
+/** 특기로 고를 수 있는 대상들 (self형은 실제로 맞을 적들을 돌려준다 — UI 하이라이트용) */
+export function skillTargets(s: BattleState, u: Unit): Unit[] {
+  const def = skillOf(u);
+  if (!def) return [];
+  if (def.area === 'adjacent') {
+    return s.units.filter((t) => t.alive && t.side !== u.side && dist(u.x, u.y, t.x, t.y) <= 1);
+  }
+  const r = skillRange(def, u.range);
+  return s.units.filter((t) => t.alive && t.side !== u.side && dist(u.x, u.y, t.x, t.y) <= r);
+}
+
+/** 관통 — 대상 너머 한 칸에 선 적 (없으면 null) */
+function pierceBehind(s: BattleState, u: Unit, t: Unit): Unit | null {
+  const dx = Math.sign(t.x - u.x);
+  const dy = Math.sign(t.y - u.y);
+  if (dx !== 0 && dy !== 0) return null; // 일직선일 때만 꿰뚫린다
+  const n = unitAt(s.units, t.x + dx, t.y + dy);
+  return n && n.alive && n.side !== u.side ? n : null;
+}
+
+/** 특기가 실제로 때릴 유닛들 — 미리보기와 판정이 같은 목록을 쓴다 */
+export function skillVictims(s: BattleState, u: Unit, target: Unit | null): Unit[] {
+  const def = skillOf(u);
+  if (!def || !def.dmgMul) return [];
+  if (def.area === 'adjacent') return skillTargets(s, u);
+  if (!target) return [];
+  if (def.area === 'pierce') {
+    const behind = pierceBehind(s, u, target);
+    return behind ? [target, behind] : [target];
+  }
+  return [target];
+}
+
+export function doSkill(s0: BattleState, targetId: string | null): BattleState {
+  const s = clone(s0);
+  const u = currentUnit(s);
+  if (!u) return s0;
+  const def = skillOf(u);
+  if (!def || u.cd > 0) return s0;
+
+  // 회복형 (사제 기도) — 사거리 안 아군 전체
+  if (def.healMul) {
+    const base = CLASSES[u.cls].heal ?? 0;
+    const amount = Math.round((base + u.level * 3) * def.healMul);
+    const targets = healTargets(s, u);
+    if (!targets.length || amount <= 0) return s0;
+    for (const t of targets) t.hp = Math.min(t.maxHp, t.hp + amount);
+    s.log.push(`${def.icon} ${u.name} ${def.name} — 아군 ${targets.length}명 +${amount}`);
+    u.cd = def.cooldown;
+    return endAction(s);
+  }
+
+  const target = targetId ? (s.units.find((x) => x.id === targetId) ?? null) : null;
+  if (def.target === 'foe') {
+    if (!target || !target.alive) return s0;
+    if (dist(u.x, u.y, target.x, target.y) > skillRange(def, u.range)) return s0;
+  }
+  const victims = skillVictims(s, u, target);
+  if (!victims.length) return s0;
+
+  const names: string[] = [];
+  for (const v of victims) {
+    const dmg = applyDamage(s, u, v, def.dmgMul ?? 1);
+    names.push(`${v.name} ${dmg}`);
+  }
+  s.log.push(`${def.icon} ${u.name} ${def.name} — ${names.join(', ')} 피해`);
+
+  // 반격 — 스킬이 허용할 때만, 그리고 첫 대상에게서만
+  if (!def.noCounter) {
+    const first = victims[0];
+    if (first.alive && dist(u.x, u.y, first.x, first.y) <= first.range) {
+      const c = applyDamage(s, first, u, 0.6);
+      s.log.push(`${first.name} 반격! ${c} 피해`);
+    }
+  }
+  u.cd = def.cooldown;
+  return endAction(s);
 }
 
 // ── 행동
@@ -293,7 +384,13 @@ export function advanceTurn(s0: BattleState): BattleState {
       s.turnIdx = 0;
     }
     const u = currentUnit(s);
-    if (u && !u.acted) return s;
+    if (u && !u.acted) {
+      // 쿨다운은 '그 유닛의 차례가 돌아올 때' 줄인다.
+      // 라운드 넘어갈 때 한꺼번에 줄이면, 라운드 끝에 쓴 느린 유닛이 곧바로 1을 돌려받아
+      // 같은 쿨다운 3이라도 속도에 따라 실제 대기가 달라진다.
+      if (u.cd > 0) u.cd -= 1;
+      return s;
+    }
     if (!s.order.length) return s;
   }
   return s;

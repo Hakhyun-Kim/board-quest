@@ -3,17 +3,21 @@ import { Canvas } from '@react-three/fiber';
 import BattleScene, { type Highlights } from './three/BattleScene';
 import {
   attackTargets,
+  canUseSkill,
   createBattle,
   currentUnit,
   doAttack,
   doHeal,
   doItem,
   doMove,
+  doSkill,
   doWait,
   foeAct,
   healTargets,
   itemTargets,
   movesFor,
+  skillOf,
+  skillTargets,
   undoMove,
   type BattleState,
 } from './lib/battle';
@@ -185,6 +189,9 @@ export default function App() {
     if (mode.kind === 'heal') {
       return { ...empty, target: new Set(healTargets(battle, unit).map((t) => key(t.x, t.y))) };
     }
+    if (mode.kind === 'skill') {
+      return { ...empty, target: new Set(skillTargets(battle, unit).map((t) => key(t.x, t.y))) };
+    }
     if (mode.kind === 'item') {
       return {
         ...empty,
@@ -207,6 +214,15 @@ export default function App() {
       if (!u || u.side !== 'ally') return;
       const target = unitAt(battle.units, x, y);
 
+      if (mode.kind === 'skill') {
+        if (target && skillTargets(battle, u).some((t) => t.id === target.id)) {
+          setBattle(doSkill(battle, target.id));
+          setMode({ kind: 'idle' });
+          setInspectId(null);
+          sfx.hit();
+        } else sfx.cancel();
+        return;
+      }
       if (mode.kind === 'heal' && target && target.side === u.side) {
         setBattle(doHeal(battle, target.id));
         setMode({ kind: 'idle' });
@@ -371,7 +387,12 @@ export default function App() {
                 <>
                   <UnitCard unit={inspectUnit} state={battle} />
                   {inspectUnit.side !== unit.side && (
-                    <TargetPreview state={battle} attacker={unit} target={inspectUnit} />
+                    <TargetPreview
+                      state={battle}
+                      attacker={unit}
+                      target={inspectUnit}
+                      skill={mode.kind === 'skill' ? skillOf(unit) : null}
+                    />
                   )}
                 </>
               )}
@@ -385,7 +406,19 @@ export default function App() {
                   unit={unit}
                   mode={mode}
                   canHeal={unit.cls === 'staff' && healTargets(battle, unit).length > 0}
+                  canSkill={canUseSkill(battle, unit)}
                   items={battle.items}
+                  onSkill={() => {
+                    // 대상을 고를 필요가 없는 특기(회전베기·기도)는 바로 발동한다
+                    const def = skillOf(unit);
+                    sfx.select();
+                    if (def && def.target === 'self') {
+                      setBattle(doSkill(battle, null));
+                      setMode({ kind: 'idle' });
+                    } else {
+                      setMode({ kind: 'skill' });
+                    }
+                  }}
                   onHeal={() => {
                     sfx.select();
                     setMode({ kind: 'heal' });

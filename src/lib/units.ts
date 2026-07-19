@@ -1,5 +1,6 @@
 // 유닛(말) — 직업별 기본 스탯과 성장. 전투 로직은 battle.ts, 배치는 board.ts.
 // 모든 수치는 순수 데이터라 시뮬레이터로 밸런스를 측정할 수 있다.
+import type { SkillId } from './skills';
 
 export type Side = 'ally' | 'foe';
 
@@ -27,6 +28,7 @@ export interface ClassDef {
   range: number; // 공격 사거리 (맨해튼 거리)
   speed: number; // 행동 순서 (높을수록 먼저)
   heal?: number; // 사제류: 회복량
+  skill?: SkillId; // 직업 특기 (쿨다운제) — 지금은 아군 직업만 가진다
   color: string; // 말 색 (절차 지오메트리 렌더용)
   desc: string;
 }
@@ -34,22 +36,22 @@ export interface ClassDef {
 export const CLASSES: Record<ClassId, ClassDef> = {
   sword: {
     id: 'sword', name: '검사', icon: '⚔️', side: 'ally',
-    hp: 36, atk: 11, def: 6, move: 4, range: 1, speed: 6,
+    hp: 36, atk: 11, def: 6, move: 4, range: 1, speed: 6, skill: 'cleave',
     color: '#5aa0ff', desc: '단단한 근접 전열. 반격이 강하다.',
   },
   bow: {
     id: 'bow', name: '궁수', icon: '🏹', side: 'ally',
-    hp: 24, atk: 10, def: 3, move: 4, range: 3, speed: 8,
+    hp: 24, atk: 10, def: 3, move: 4, range: 3, speed: 8, skill: 'snipe',
     color: '#7be07a', desc: '사거리 3. 반격을 받지 않지만 몸이 약하다.',
   },
   staff: {
     id: 'staff', name: '사제', icon: '✨', side: 'ally',
-    hp: 24, atk: 6, def: 3, move: 4, range: 2, speed: 5, heal: 14,
+    hp: 24, atk: 6, def: 3, move: 4, range: 2, speed: 5, heal: 14, skill: 'prayer',
     color: '#ffd166', desc: '아군을 회복시킨다. 원정의 생명줄.',
   },
   spear: {
     id: 'spear', name: '창병', icon: '🔱', side: 'ally',
-    hp: 30, atk: 10, def: 5, move: 5, range: 2, speed: 7,
+    hp: 30, atk: 10, def: 5, move: 5, range: 2, speed: 7, skill: 'pierce',
     color: '#c06bff', desc: '사거리 2의 근접. 발이 빠르다.',
   },
   goblin: {
@@ -98,6 +100,8 @@ export interface Unit {
   acted: boolean; // 이번 라운드 행동 완료
   alive: boolean;
   buffAtk: number; // 아이템 등으로 이번 전투 동안 오른 공격력
+  skill: SkillId | null; // 직업 특기
+  cd: number; // 특기 남은 쿨다운 (0이면 쓸 수 있다). 라운드가 넘어갈 때 1씩 줄어든다
 }
 
 // 레벨에 따른 성장 — 선형(검증하기 쉬움). 레벨 1이 기본 스탯.
@@ -141,6 +145,8 @@ export function makeUnit(
     acted: false,
     alive: true,
     buffAtk: 0,
+    skill: c.skill ?? null,
+    cd: 0,
   };
 }
 

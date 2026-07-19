@@ -503,6 +503,22 @@ h2 {
   text-align: center;
 }
 
+/* 유닛 카드의 특기 줄 — 쿨다운이면 흐리게 */
+.unit-skill {
+  margin-top: 5px;
+  padding-top: 5px;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  font-size: 12px;
+  color: #ffd166;
+}
+.unit-skill em {
+  font-style: normal;
+  opacity: 0.75;
+}
+.unit-skill.cooling {
+  color: #8b97ab;
+}
+
 /* 상시 안내 — 메뉴에서 뺀 '이동·공격'을 대신하므로 눈에 거슬리지 않게 */
 .action-hint.dim {
   color: #8b97ab;

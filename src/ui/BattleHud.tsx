@@ -1,6 +1,7 @@
 import { TERRAIN, terrainAt } from '../lib/board';
-import { previewDamage, type BattleState } from '../lib/battle';
+import { previewDamage, skillOf, type BattleState } from '../lib/battle';
 import { ITEMS, type Inventory } from '../lib/items';
+import { skillRange, type SkillDef } from '../lib/skills';
 import { CLASSES, type Unit } from '../lib/units';
 import { ChoiceList } from './Menu';
 
@@ -12,6 +13,7 @@ import { ChoiceList } from './Menu';
 export type BattleMode =
   | { kind: 'idle' }
   | { kind: 'heal' }
+  | { kind: 'skill' } // 대상을 골라야 하는 특기 (저격·관통)
   | { kind: 'item'; itemId: string };
 
 export function TurnOrderBar({ state }: { state: BattleState }) {
@@ -66,6 +68,12 @@ export function UnitCard({ unit, state }: { unit: Unit; state: BattleState }) {
           {t.atk > 0 && ` 공+${t.atk}`}
         </span>
       </div>
+      {skillOf(unit) && (
+        <div className={`unit-skill${unit.cd > 0 ? ' cooling' : ''}`}>
+          {skillOf(unit)!.icon} {skillOf(unit)!.name}
+          <em>{unit.cd > 0 ? ` ${unit.cd}라운드 뒤` : ' 준비됨'}</em>
+        </div>
+      )}
     </div>
   );
 }
@@ -76,8 +84,10 @@ export function ActionMenu({
   unit,
   mode,
   canHeal,
+  canSkill,
   items,
   onHeal,
+  onSkill,
   onItem,
   onWait,
   onUndo,
@@ -87,16 +97,24 @@ export function ActionMenu({
   unit: Unit;
   mode: BattleMode;
   canHeal: boolean;
+  canSkill: boolean;
   items: Inventory;
   onHeal: () => void;
+  onSkill: () => void;
   onItem: (id: string) => void;
   onWait: () => void;
   onUndo: () => void;
   onCancel: () => void;
 }) {
+  const skill = skillOf(unit);
+
   if (mode.kind !== 'idle') {
     const hint =
-      mode.kind === 'heal' ? '아군을 눌러 회복' : `${ITEMS[mode.itemId]?.icon ?? ''} 대상을 누르세요`;
+      mode.kind === 'heal'
+        ? '아군을 눌러 회복'
+        : mode.kind === 'skill'
+          ? `${skill?.icon ?? ''} ${skill?.name ?? ''} — 붉은 적을 누르세요`
+          : `${ITEMS[mode.itemId]?.icon ?? ''} 대상을 누르세요`;
     return (
       <div className="action-panel">
         <p className="action-hint">{hint}</p>
@@ -109,6 +127,19 @@ export function ActionMenu({
   // 여기 남는 건 '판을 눌러선 뜻이 애매한' 것들뿐.
   const ownedItems = Object.keys(items).filter((id) => (items[id] ?? 0) > 0 && ITEMS[id]);
   const menu: { key: string; label: string; disabled: boolean; onPick: () => void }[] = [];
+
+  // 특기 — 쿨다운이 남았으면 남은 라운드를 그대로 보여 준다 (언제 다시 쓸지가 판단의 재료)
+  if (skill) {
+    menu.push({
+      key: 'skill',
+      label:
+        unit.cd > 0
+          ? `${skill.icon} ${skill.name} (${unit.cd}라운드 뒤)`
+          : `${skill.icon} ${skill.name}`,
+      disabled: !canSkill,
+      onPick: onSkill,
+    });
+  }
   if (unit.cls === 'staff') {
     menu.push({ key: 'heal', label: '✨ 회복', disabled: !canHeal, onPick: onHeal });
   }
@@ -141,29 +172,40 @@ export function TargetPreview({
   state,
   attacker,
   target,
+  skill,
 }: {
   state: BattleState;
   attacker: Unit;
   target: Unit;
+  /** 특기를 겨누는 중이면 그 배수·반격 규칙으로 미리 본다 */
+  skill?: SkillDef | null;
 }) {
-  const dmg = previewDamage(state.board, attacker, target);
-  const inCounterRange =
-    Math.abs(attacker.x - target.x) + Math.abs(attacker.y - target.y) <= target.range;
+  const d = Math.abs(attacker.x - target.x) + Math.abs(attacker.y - target.y);
+  const reaches = skill ? d <= skillRange(skill, attacker.range) : d <= attacker.range;
+  const dmg = previewDamage(state.board, attacker, target, skill?.dmgMul ?? 1);
   const counter = previewDamage(state.board, target, attacker);
+  const counters = !skill?.noCounter && d <= target.range;
   return (
     <div className="target-preview">
       <span className="tp-name">
+        {skill ? `${skill.icon} ` : ''}
         {CLASSES[target.cls].icon} {target.name}
       </span>
-      <span className="tp-dmg">
-        예상 피해 {dmg.min}~{dmg.max}
-        {dmg.min >= target.hp && <em> · 처치!</em>}
-      </span>
-      <span className="tp-counter">
-        {inCounterRange
-          ? `반격 ${Math.round(counter.min * 0.6)}~${Math.round(counter.max * 0.6)}`
-          : '반격 없음'}
-      </span>
+      {reaches ? (
+        <>
+          <span className="tp-dmg">
+            예상 피해 {dmg.min}~{dmg.max}
+            {dmg.min >= target.hp && <em> · 처치!</em>}
+          </span>
+          <span className="tp-counter">
+            {counters
+              ? `반격 ${Math.round(counter.min * 0.6)}~${Math.round(counter.max * 0.6)}`
+              : '반격 없음'}
+          </span>
+        </>
+      ) : (
+        <span className="tp-counter">사거리 밖 (거리 {d})</span>
+      )}
     </div>
   );
 }
