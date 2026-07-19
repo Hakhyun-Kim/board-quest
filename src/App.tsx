@@ -2,20 +2,20 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Canvas } from '@react-three/fiber';
 import BattleScene, { type Highlights } from './three/BattleScene';
 import {
-  attackTargets,
   canUseSkill,
   createBattle,
   currentUnit,
-  doAttack,
   doHeal,
   doItem,
   doMove,
+  doPlannedAttack,
   doSkill,
   doWait,
   foeAct,
   healTargets,
   itemTargets,
   movesFor,
+  reachableAttacks,
   skillOf,
   skillTargets,
   undoMove,
@@ -182,9 +182,20 @@ export default function App() {
   const unit = battle ? currentUnit(battle) : null;
   const isAllyTurn = !!unit && unit.side === 'ally' && !battle?.result;
 
-  // ── 하이라이트 (이동 파랑 / 대상 빨강)
+  // 이번 턴에 때릴 수 있는 적 전부 (이동해서 닿는 것 포함) — 하이라이트와 클릭이 같은 계획을 쓴다
+  const plans = useMemo(
+    () => (battle && unit && isAllyTurn ? reachableAttacks(battle, unit) : new Map()),
+    [battle, unit, isAllyTurn],
+  );
+
+  // ── 하이라이트 (이동 파랑 / 지금 칠 수 있는 적 빨강 / 이동해야 닿는 적 주황)
   const highlights: Highlights = useMemo(() => {
-    const empty: Highlights = { move: new Set(), target: new Set(), path: new Set() };
+    const empty: Highlights = {
+      move: new Set(),
+      target: new Set(),
+      threat: new Set(),
+      path: new Set(),
+    };
     if (!battle || !unit || !isAllyTurn) return empty;
     if (mode.kind === 'heal') {
       return { ...empty, target: new Set(healTargets(battle, unit).map((t) => key(t.x, t.y))) };
@@ -198,13 +209,19 @@ export default function App() {
         target: new Set(itemTargets(battle, unit, mode.itemId).map((t) => key(t.x, t.y))),
       };
     }
-    // idle — 따로 메뉴를 누르지 않아도 바로 움직이고 때릴 수 있으므로,
-    //        갈 수 있는 칸(파랑)과 지금 때릴 수 있는 적(빨강)을 함께 보여 준다.
+    // idle — 갈 수 있는 칸(파랑) + 지금 칠 수 있는 적(빨강) + 이동하면 닿는 적(주황).
+    //        "저기까지 가서 때릴 수 있나"를 손으로 세어 보지 않아도 되게 미리 칠해 준다.
     const m = new Set<string>();
     if (!battle.moved) movesFor(battle, unit).forEach((t) => m.add(key(t.x, t.y)));
-    const tg = new Set(attackTargets(battle, unit).map((t) => key(t.x, t.y)));
-    return { ...empty, move: m, target: tg };
-  }, [battle, unit, mode, isAllyTurn]);
+    const now = new Set<string>();
+    const after = new Set<string>();
+    for (const [id, p] of plans) {
+      const t = battle.units.find((x) => x.id === id);
+      if (!t) continue;
+      (p.moves ? after : now).add(key(t.x, t.y));
+    }
+    return { ...empty, move: m, target: now, threat: after };
+  }, [battle, unit, mode, isAllyTurn, plans]);
 
   // ── 보드 클릭
   const onTile = useCallback(
@@ -241,12 +258,15 @@ export default function App() {
       // ── idle — 메뉴를 거치지 않는 직접 조작이 기본이다.
       //    적을 누르면 곧장 공격, 파란 칸을 누르면 곧장 이동.
       if (target && target.side !== u.side) {
-        if (attackTargets(battle, u).some((t) => t.id === target.id)) {
-          setBattle(doAttack(battle, target.id));
+        const plan = plans.get(target.id);
+        if (plan) {
+          // 이동이 필요하면 이동까지 한 번에 — 일일이 옮겨 놓고 확인할 필요 없게
+          if (plan.moves) sfx.move();
+          setBattle(doPlannedAttack(battle, plan));
           setInspectId(null);
           sfx.hit();
         } else {
-          // 사거리 밖 — 때릴 수 없으니 정보만 보여 준다
+          // 이번 턴엔 닿지 않는다 — 때리는 대신 정보만
           setInspectId(target.id);
           sfx.cancel();
         }
@@ -260,7 +280,7 @@ export default function App() {
       // 그 외(아군·빈 칸 밖) — 정보 확인
       setInspectId(target ? target.id : null);
     },
-    [battle, mode],
+    [battle, mode, plans],
   );
 
   // 우클릭 — 행동하지 않고 상세 정보만 (오조작 없이 적을 살펴볼 수 있게)
@@ -338,6 +358,8 @@ export default function App() {
   devRef.current = { battle, journey, party, gold, phase, onTile, travel };
   useEffect(() => {
     if (!import.meta.env.DEV) return;
+    // 밸런스 시뮬레이터 — 콘솔에서 __bqsim.sweep()
+    void import('./dev/simBot').then((m) => m.installSimHook());
     (window as unknown as Record<string, unknown>).__bq = {
       phase: () => devRef.current.phase,
       state: () => devRef.current.battle,
@@ -386,14 +408,22 @@ export default function App() {
               {inspectUnit && unit && inspectUnit.id !== unit.id && (
                 <>
                   <UnitCard unit={inspectUnit} state={battle} />
-                  {inspectUnit.side !== unit.side && (
-                    <TargetPreview
-                      state={battle}
-                      attacker={unit}
-                      target={inspectUnit}
-                      skill={mode.kind === 'skill' ? skillOf(unit) : null}
-                    />
-                  )}
+                  {inspectUnit.side !== unit.side &&
+                    (() => {
+                      // 이동해서 때릴 상대면, 실제로 설 자리 기준으로 미리 본다
+                      // (언덕·숲 보정이 달라지므로 제자리 기준으로 보여 주면 수치가 어긋난다)
+                      const p = mode.kind === 'idle' ? plans.get(inspectUnit.id) : undefined;
+                      const from = p ? { ...unit, x: p.x, y: p.y } : unit;
+                      return (
+                        <TargetPreview
+                          state={battle}
+                          attacker={from}
+                          target={inspectUnit}
+                          skill={mode.kind === 'skill' ? skillOf(unit) : null}
+                          movesFirst={!!p?.moves}
+                        />
+                      );
+                    })()}
                 </>
               )}
               <BattleLog log={battle.log} />

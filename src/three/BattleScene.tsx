@@ -17,7 +17,8 @@ export const tileToWorld = (b: Board, x: number, y: number): [number, number] =>
 
 export interface Highlights {
   move: Set<string>; // 이동 가능 칸
-  target: Set<string>; // 공격·회복·아이템 대상 칸
+  target: Set<string>; // 지금 바로 칠 수 있는 대상 (공격·회복·아이템)
+  threat: Set<string>; // 이동해야 닿는 적 — 누르면 이동 후 공격
   path: Set<string>; // (예약) 이동 경로 미리보기
 }
 
@@ -136,6 +137,8 @@ export default function BattleScene({
       i++;
     };
     highlights.move.forEach((k) => put(k, '#4d8dff'));
+    // 이동해야 닿는 적은 주황 — "지금 당장"(빨강)과 구분해 준다
+    highlights.threat.forEach((k) => put(k, '#ff9f43'));
     highlights.target.forEach((k) => put(k, '#ff4d6a'));
     // 남는 인스턴스는 화면 밖으로
     for (; i < tileCount; i++) {

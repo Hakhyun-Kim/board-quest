@@ -158,6 +158,76 @@ export function itemTargets(s: BattleState, u: Unit, itemId: string): Unit[] {
   });
 }
 
+// ── 이동 후 공격 계획
+// "이 적을 이번 턴에 때릴 수 있나"를 매번 손으로 확인하지 않아도 되게, 갈 수 있는 칸까지
+// 포함해 미리 계산해 둔다. UI 하이라이트도, 시뮬레이터의 아군 AI도 같은 함수를 쓴다.
+export interface AttackPlan {
+  x: number; // 때릴 자리
+  y: number;
+  targetId: string;
+  dmg: number; // 기본 피해 (난수 전)
+  counter: number; // 예상 반격 (0이면 반격 없음)
+  moves: boolean; // 이동이 필요한가
+}
+
+/** 이 적을 때릴 수 있는 가장 좋은 자리 (없으면 null) */
+export function planAttack(
+  s: BattleState,
+  u: Unit,
+  target: Unit,
+  tilesIn?: { x: number; y: number }[],
+): AttackPlan | null {
+  if (!target.alive || target.side === u.side || !u.alive) return null;
+  // 이미 이동했으면 제자리에서만 때릴 수 있다
+  const tiles =
+    tilesIn ?? (s.moved ? [{ x: u.x, y: u.y }] : [...reachable(s.board, s.units, u).values()]);
+
+  let best: (AttackPlan & { score: number }) | null = null;
+  for (const t of tiles) {
+    const d = dist(t.x, t.y, target.x, target.y);
+    if (d > u.range) continue;
+    const probe = { ...u, x: t.x, y: t.y };
+    const dmg = baseDamage(s.board, probe, target);
+    const counter = d <= target.range ? baseDamage(s.board, target, probe) * 0.6 : 0;
+    // 다른 적의 사거리에 들어가는 자리는 피한다 (표적 하나 잡자고 뭇매를 맞지 않게)
+    const exposure = s.units.filter(
+      (o) => o.alive && o.side !== u.side && o.id !== target.id && dist(t.x, t.y, o.x, o.y) <= o.range,
+    ).length;
+    const stays = t.x === u.x && t.y === u.y;
+    // 같은 값이면 제자리를 선호 (쓸데없이 움직이지 않게)
+    const score = dmg * 2 - counter * 1.5 - exposure * 3 + (stays ? 0.1 : 0);
+    if (!best || score > best.score) {
+      best = { x: t.x, y: t.y, targetId: target.id, dmg, counter, moves: !stays, score };
+    }
+  }
+  if (!best) return null;
+  const { score: _score, ...plan } = best;
+  return plan;
+}
+
+/** 이번 턴에 때릴 수 있는 적 전부 — 이동해야 닿는 것까지 포함 (적 id → 계획) */
+export function reachableAttacks(s: BattleState, u: Unit): Map<string, AttackPlan> {
+  const out = new Map<string, AttackPlan>();
+  if (!u.alive) return out;
+  const tiles = s.moved ? [{ x: u.x, y: u.y }] : [...reachable(s.board, s.units, u).values()];
+  for (const t of s.units) {
+    if (!t.alive || t.side === u.side) continue;
+    const p = planAttack(s, u, t, tiles);
+    if (p) out.set(t.id, p);
+  }
+  return out;
+}
+
+/** 계획대로 (필요하면 이동한 뒤) 공격 — 클릭 한 번에 일어나는 일 */
+export function doPlannedAttack(s0: BattleState, plan: AttackPlan): BattleState {
+  let s = s0;
+  if (plan.moves) {
+    s = doMove(s, plan.x, plan.y);
+    if (s === s0) return s0; // 이동이 막히면 아무것도 하지 않는다
+  }
+  return doAttack(s, plan.targetId);
+}
+
 // ── 특기(스킬)
 /** 이 유닛이 지금 특기를 쓸 수 있는가 (배운 게 있고, 쿨다운이 돌았고, 맞을 대상이 있는가) */
 export function canUseSkill(s: BattleState, u: Unit): boolean {

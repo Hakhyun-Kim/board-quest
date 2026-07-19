@@ -160,7 +160,8 @@ export function ActionMenu({
   return (
     <div className="action-panel">
       <p className="action-hint dim">
-        {state.moved ? '' : '🔵 칸 = 이동 · '}🔴 적 = 공격 · 우클릭(길게 누르기) = 정보
+        {state.moved ? '' : '🔵 이동 · '}🔴 공격{state.moved ? '' : ' · 🟠 이동 후 공격'} ·
+        우클릭(길게) = 정보
       </p>
       <ChoiceList items={menu} />
     </div>
@@ -173,12 +174,15 @@ export function TargetPreview({
   attacker,
   target,
   skill,
+  movesFirst,
 }: {
   state: BattleState;
   attacker: Unit;
   target: Unit;
   /** 특기를 겨누는 중이면 그 배수·반격 규칙으로 미리 본다 */
   skill?: SkillDef | null;
+  /** 이동한 뒤에 때리는 상대인가 (attacker는 이미 그 자리 기준으로 넘어온다) */
+  movesFirst?: boolean;
 }) {
   const d = Math.abs(attacker.x - target.x) + Math.abs(attacker.y - target.y);
   const reaches = skill ? d <= skillRange(skill, attacker.range) : d <= attacker.range;
@@ -190,6 +194,7 @@ export function TargetPreview({
       <span className="tp-name">
         {skill ? `${skill.icon} ` : ''}
         {CLASSES[target.cls].icon} {target.name}
+        {movesFirst && <em className="tp-move"> · 이동 후</em>}
       </span>
       {reaches ? (
         <>

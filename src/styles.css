@@ -503,6 +503,12 @@ h2 {
   text-align: center;
 }
 
+/* 이동해서 때리는 상대임을 알리는 꼬리표 (하이라이트 주황과 같은 색) */
+.tp-move {
+  font-style: normal;
+  color: #ff9f43;
+}
+
 /* 유닛 카드의 특기 줄 — 쿨다운이면 흐리게 */
 .unit-skill {
   margin-top: 5px;
