@@ -66,6 +66,7 @@ export default function App() {
   const [battle, setBattle] = useState<BattleState | null>(null);
   const [mode, setMode] = useState<BattleMode>({ kind: 'idle' });
   const [inspectId, setInspectId] = useState<string | null>(null);
+  const [hoverId, setHoverId] = useState<string | null>(null); // 마우스가 올라간 말 (터치엔 없음)
   const [reward, setReward] = useState({ gold: 0, exp: 0, item: null as string | null, heal: 0 });
   const [best, setBest] = useLocalStorage<number>('bq-best', 0);
   const [muted, setMutedState] = useState(isMuted());
@@ -181,14 +182,6 @@ export default function App() {
   const highlights: Highlights = useMemo(() => {
     const empty: Highlights = { move: new Set(), target: new Set(), path: new Set() };
     if (!battle || !unit || !isAllyTurn) return empty;
-    if (mode.kind === 'move') {
-      const m = new Set<string>();
-      movesFor(battle, unit).forEach((t) => m.add(key(t.x, t.y)));
-      return { ...empty, move: m };
-    }
-    if (mode.kind === 'attack') {
-      return { ...empty, target: new Set(attackTargets(battle, unit).map((t) => key(t.x, t.y))) };
-    }
     if (mode.kind === 'heal') {
       return { ...empty, target: new Set(healTargets(battle, unit).map((t) => key(t.x, t.y))) };
     }
@@ -198,13 +191,12 @@ export default function App() {
         target: new Set(itemTargets(battle, unit, mode.itemId).map((t) => key(t.x, t.y))),
       };
     }
-    // idle — 이동 가능 범위를 옅게 보여 준다 (아직 이동 안 했을 때)
-    if (!battle.moved) {
-      const m = new Set<string>();
-      movesFor(battle, unit).forEach((t) => m.add(key(t.x, t.y)));
-      return { ...empty, move: m };
-    }
-    return empty;
+    // idle — 따로 메뉴를 누르지 않아도 바로 움직이고 때릴 수 있으므로,
+    //        갈 수 있는 칸(파랑)과 지금 때릴 수 있는 적(빨강)을 함께 보여 준다.
+    const m = new Set<string>();
+    if (!battle.moved) movesFor(battle, unit).forEach((t) => m.add(key(t.x, t.y)));
+    const tg = new Set(attackTargets(battle, unit).map((t) => key(t.x, t.y)));
+    return { ...empty, move: m, target: tg };
   }, [battle, unit, mode, isAllyTurn]);
 
   // ── 보드 클릭
@@ -215,22 +207,6 @@ export default function App() {
       if (!u || u.side !== 'ally') return;
       const target = unitAt(battle.units, x, y);
 
-      if (mode.kind === 'move') {
-        if (movesFor(battle, u).has(key(x, y))) {
-          setBattle(doMove(battle, x, y));
-          setMode({ kind: 'idle' });
-          sfx.move();
-        } else {
-          sfx.cancel();
-        }
-        return;
-      }
-      if (mode.kind === 'attack' && target && target.side !== u.side) {
-        setBattle(doAttack(battle, target.id));
-        setMode({ kind: 'idle' });
-        sfx.hit();
-        return;
-      }
       if (mode.kind === 'heal' && target && target.side === u.side) {
         setBattle(doHeal(battle, target.id));
         setMode({ kind: 'idle' });
@@ -246,10 +222,40 @@ export default function App() {
         } else sfx.cancel();
         return;
       }
-      // idle — 말을 누르면 정보 확인
+      // ── idle — 메뉴를 거치지 않는 직접 조작이 기본이다.
+      //    적을 누르면 곧장 공격, 파란 칸을 누르면 곧장 이동.
+      if (target && target.side !== u.side) {
+        if (attackTargets(battle, u).some((t) => t.id === target.id)) {
+          setBattle(doAttack(battle, target.id));
+          setInspectId(null);
+          sfx.hit();
+        } else {
+          // 사거리 밖 — 때릴 수 없으니 정보만 보여 준다
+          setInspectId(target.id);
+          sfx.cancel();
+        }
+        return;
+      }
+      if (!target && !battle.moved && movesFor(battle, u).has(key(x, y))) {
+        setBattle(doMove(battle, x, y));
+        sfx.move();
+        return;
+      }
+      // 그 외(아군·빈 칸 밖) — 정보 확인
       setInspectId(target ? target.id : null);
     },
     [battle, mode],
+  );
+
+  // 우클릭 — 행동하지 않고 상세 정보만 (오조작 없이 적을 살펴볼 수 있게)
+  const onInspectTile = useCallback(
+    (x: number, y: number) => {
+      if (!battle) return;
+      const target = unitAt(battle.units, x, y);
+      setInspectId(target ? target.id : null);
+      if (target) sfx.select();
+    },
+    [battle],
   );
 
   // ── 마을 행동
@@ -295,7 +301,20 @@ export default function App() {
     else setPhase('journey');
   };
 
-  const inspectUnit = battle && inspectId ? battle.units.find((u) => u.id === inspectId) : null;
+  const lastHover = useRef<[number, number] | null>(null); // 검증용 — 포인터가 어느 칸으로 읽혔나
+  const onHoverTile = useCallback(
+    (x: number, y: number | null) => {
+      lastHover.current = y === null ? null : [x, y];
+      if (!battle || y === null) return setHoverId(null);
+      setHoverId(unitAt(battle.units, x, y)?.id ?? null);
+    },
+    [battle],
+  );
+
+  // 고정(우클릭)이 우선, 없으면 마우스가 올라간 말을 보여 준다 —
+  // 덕분에 적 위에 커서만 올려도 예상 피해를 미리 볼 수 있다.
+  const shownId = inspectId ?? hoverId;
+  const inspectUnit = battle && shownId ? battle.units.find((u) => u.id === shownId) : null;
 
   // ── 개발 검증용 훅 (프로덕션 번들 제외) — 브라우저 자동화·밸런스 시뮬레이터의 진입점.
   //    3D 클릭을 흉내 내지 않고 tile(x,y)로 같은 경로를 태울 수 있다.
@@ -313,6 +332,8 @@ export default function App() {
       tile: (x: number, y: number) => devRef.current.onTile(x, y),
       /** 원정 지도에서 노드로 이동 */
       travel: (id: number) => devRef.current.travel(id),
+      /** 포인터가 마지막으로 읽힌 칸 — 레이캐스트 정확도 검증용 */
+      hover: () => lastHover.current,
     };
   }, []);
 
@@ -320,9 +341,20 @@ export default function App() {
     <div className="app">
       {phase === 'battle' && battle && (
         <>
-          <Canvas className="canvas" camera={{ fov: 50, position: [0, 18, 13] }} dpr={[1, 2]}>
+          <Canvas
+            className="canvas"
+            camera={{ fov: 50, position: [0, 18, 13] }}
+            dpr={[1, 2]}
+            onContextMenu={(e) => e.preventDefault()} // 우클릭은 '정보 보기'로 쓴다
+          >
             <color attach="background" args={['#131a26']} />
-            <BattleScene state={battle} highlights={highlights} onTile={onTile} />
+            <BattleScene
+              state={battle}
+              highlights={highlights}
+              onTile={onTile}
+              onInspect={onInspectTile}
+              onHover={onHoverTile}
+            />
           </Canvas>
 
           <div className="battle-ui">
@@ -352,17 +384,8 @@ export default function App() {
                   state={battle}
                   unit={unit}
                   mode={mode}
-                  canAttack={attackTargets(battle, unit).length > 0}
                   canHeal={unit.cls === 'staff' && healTargets(battle, unit).length > 0}
                   items={battle.items}
-                  onMove={() => {
-                    sfx.select();
-                    setMode({ kind: 'move' });
-                  }}
-                  onAttack={() => {
-                    sfx.select();
-                    setMode({ kind: 'attack' });
-                  }}
                   onHeal={() => {
                     sfx.select();
                     setMode({ kind: 'heal' });

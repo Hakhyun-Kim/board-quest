@@ -21,6 +21,35 @@ export interface Highlights {
   path: Set<string>; // (예약) 이동 경로 미리보기
 }
 
+// r3f 포인터 이벤트 중 이 파일이 쓰는 부분만 추린 것
+type ThreeEvent = {
+  instanceId?: number;
+  button: number;
+  stopPropagation: () => void;
+};
+
+// 장식용 메시를 레이캐스트에서 빼는 표식 (하이라이트가 칸 클릭을 가리지 않도록)
+const NO_RAYCAST = () => null;
+
+// 개발 검증용 — 칸 중심의 화면 좌표(px)를 내준다.
+// 클릭 판정이 실제로 그 칸에 맞는지 자동으로 확인하기 위한 것 (프로덕션 제외).
+function DevProjector({ board }: { board: Board }) {
+  const { camera, size, gl } = useThree();
+  useEffect(() => {
+    if (!import.meta.env.DEV) return;
+    const w = window as unknown as Record<string, unknown>;
+    w.__bqProject = (x: number, y: number) => {
+      const t = TERRAIN[terrainAt(board, x, y)];
+      const [wx, wz] = tileToWorld(board, x, y);
+      const v = new THREE.Vector3(wx, Math.max(0, t.height) + 0.1, wz).project(camera);
+      // r3f가 NDC를 만들 때 쓰는 것과 같은 기준(캔버스 rect)을 써야 왕복이 맞는다
+      const r = gl.domElement.getBoundingClientRect();
+      return { x: r.left + ((v.x + 1) / 2) * r.width, y: r.top + ((1 - v.y) / 2) * r.height };
+    };
+  }, [camera, size, gl, board]);
+  return null;
+}
+
 // 화면 비율에 맞춰 보드 전체가 들어오도록 카메라를 맞춘다 (모바일 세로도 고려)
 function CameraRig({ w, h }: { w: number; h: number }) {
   const { camera, size } = useThree();
@@ -42,10 +71,16 @@ export default function BattleScene({
   state,
   highlights,
   onTile,
+  onInspect,
+  onHover,
 }: {
   state: BattleState;
   highlights: Highlights;
   onTile: (x: number, y: number) => void;
+  /** 우클릭 — 정보만 보기 (행동하지 않음) */
+  onInspect: (x: number, y: number) => void;
+  /** 마우스가 올라간 칸 (터치에는 없음) */
+  onHover: (x: number, y: number | null) => void;
 }) {
   const board = state.board;
   const tileCount = board.w * board.h;
@@ -130,59 +165,129 @@ export default function BattleScene({
     r.scale.set(s, s, s);
   });
 
-  // 클릭 판 — 보드를 덮는 투명 평면에서 좌표 → 타일 변환
-  const handleClick = (e: { point: THREE.Vector3; stopPropagation: () => void }) => {
+  // 클릭 판정 — 지형 InstancedMesh를 직접 레이캐스트해서 instanceId로 칸을 얻는다.
+  // (예전엔 보드 위에 띄운 투명 평면을 썼는데, 카메라가 기울어 있어 평면 높이만큼
+  //  화면상 한 칸 가까이 어긋났다. instanceId는 실제로 맞은 칸이라 어긋날 수가 없다.)
+  const tileOf = (instanceId: number | undefined): [number, number] | null => {
+    if (instanceId == null || instanceId < 0 || instanceId >= tileCount) return null;
+    return [instanceId % board.w, Math.floor(instanceId / board.w)];
+  };
+  // 누름 판정 — 행동은 '뗄 때' 일어난다.
+  // 우클릭은 곧바로 정보, 길게 누르기(450ms)도 정보 — 터치에서도 오조작 없이 적을 살펴볼 수 있게.
+  const press = useRef<{ x: number; y: number; timer: number; long: boolean } | null>(null);
+  const clearPress = () => {
+    if (press.current) clearTimeout(press.current.timer);
+    press.current = null;
+  };
+  const beginPress = (x: number, y: number, button: number) => {
+    clearPress();
+    if (button === 2) {
+      onInspect(x, y);
+      return;
+    }
+    const p = { x, y, long: false, timer: 0 };
+    p.timer = window.setTimeout(() => {
+      p.long = true;
+      onInspect(x, y);
+    }, 450);
+    press.current = p;
+  };
+  const endPress = (x: number, y: number) => {
+    const p = press.current;
+    clearPress();
+    if (!p || p.long) return; // 길게 눌러 정보를 봤으면 행동하지 않는다
+    if (p.x !== x || p.y !== y) return; // 다른 칸에서 뗐으면 취소 (드래그 오조작 방지)
+    onTile(x, y);
+  };
+  useEffect(() => clearPress, []);
+
+  const onTileDown = (e: ThreeEvent) => {
+    const t = tileOf(e.instanceId);
+    if (!t) return;
     e.stopPropagation();
-    const x = Math.floor(e.point.x / TILE + board.w / 2);
-    const y = Math.floor(e.point.z / TILE + board.h / 2);
-    if (x >= 0 && y >= 0 && x < board.w && y < board.h) onTile(x, y);
+    beginPress(t[0], t[1], e.button);
+  };
+  const onTileUp = (e: ThreeEvent) => {
+    const t = tileOf(e.instanceId);
+    if (!t) return;
+    e.stopPropagation();
+    endPress(t[0], t[1]);
+  };
+  const onTileMove = (e: ThreeEvent) => {
+    const t = tileOf(e.instanceId);
+    if (t) onHover(t[0], t[1]);
   };
 
   return (
     <group>
       <CameraRig w={board.w} h={board.h} />
+      <DevProjector board={board} />
       <ambientLight intensity={0.75} />
       <directionalLight position={[6, 14, 6]} intensity={1.1} />
 
-      {/* 지형 */}
-      <instancedMesh ref={tileRef} args={[undefined, undefined, tileCount]} frustumCulled={false}>
+      {/* 지형 — 클릭 판정의 기준면이기도 하다 */}
+      <instancedMesh
+        ref={tileRef}
+        args={[undefined, undefined, tileCount]}
+        frustumCulled={false}
+        onPointerDown={onTileDown}
+        onPointerUp={onTileUp}
+        onPointerMove={onTileMove}
+        onPointerOut={() => {
+          clearPress();
+          onHover(0, null);
+        }}
+      >
         <boxGeometry args={[TILE, 1, TILE]} />
         <meshStandardMaterial />
       </instancedMesh>
 
-      {/* 하이라이트 (이동=파랑, 대상=빨강) */}
-      <instancedMesh ref={hlRef} args={[undefined, undefined, tileCount]} frustumCulled={false}>
+      {/* 하이라이트 (이동=파랑, 대상=빨강) — 장식이므로 레이캐스트에서 제외 */}
+      <instancedMesh
+        ref={hlRef}
+        args={[undefined, undefined, tileCount]}
+        frustumCulled={false}
+        raycast={NO_RAYCAST}
+      >
         <planeGeometry args={[TILE, TILE]} />
         <meshBasicMaterial transparent opacity={0.42} toneMapped={false} />
       </instancedMesh>
 
       {/* 차례 표시 링 */}
-      <mesh ref={ringRef} rotation={[-Math.PI / 2, 0, 0]} visible={false}>
+      <mesh ref={ringRef} rotation={[-Math.PI / 2, 0, 0]} visible={false} raycast={NO_RAYCAST}>
         <ringGeometry args={[0.44, 0.56, 24]} />
         <meshBasicMaterial color="#ffd166" transparent opacity={0.9} toneMapped={false} />
       </mesh>
 
-      {/* 말 + 체력 바 */}
+      {/* 말 + 체력 바 — 말 자체를 눌러도 그 칸을 누른 것으로 친다 */}
       {state.units.map((u) => (
-        <UnitOnBoard key={u.id} unit={u} board={board} />
+        <UnitOnBoard
+          key={u.id}
+          unit={u}
+          board={board}
+          onPress={beginPress}
+          onRelease={endPress}
+          onHover={onHover}
+        />
       ))}
-
-      {/* 클릭 판 */}
-      <mesh
-        rotation={[-Math.PI / 2, 0, 0]}
-        position={[0, 1.2, 0]}
-        onPointerDown={handleClick}
-        visible={false}
-      >
-        <planeGeometry args={[board.w * TILE, board.h * TILE]} />
-        <meshBasicMaterial />
-      </mesh>
     </group>
   );
 }
 
 // 말 하나 — 위치 보간(이동이 미끄러지듯) + 체력 바
-function UnitOnBoard({ unit, board }: { unit: Unit; board: Board }) {
+function UnitOnBoard({
+  unit,
+  board,
+  onPress,
+  onRelease,
+  onHover,
+}: {
+  unit: Unit;
+  board: Board;
+  onPress: (x: number, y: number, button: number) => void;
+  onRelease: (x: number, y: number) => void;
+  onHover: (x: number, y: number | null) => void;
+}) {
   const g = useRef<THREE.Group>(null);
   const barRef = useRef<THREE.Mesh>(null);
   const t = TERRAIN[terrainAt(board, unit.x, unit.y)];
@@ -208,8 +313,26 @@ function UnitOnBoard({ unit, board }: { unit: Unit; board: Board }) {
     }
   });
 
+  // 쓰러진 말은 판정에서 빼 둔다 — 그 칸으로 이동하려는 클릭을 가로막지 않도록.
+  const hit = unit.alive
+    ? {
+        onPointerDown: (e: ThreeEvent) => {
+          e.stopPropagation();
+          onPress(unit.x, unit.y, e.button);
+        },
+        onPointerUp: (e: ThreeEvent) => {
+          e.stopPropagation();
+          onRelease(unit.x, unit.y);
+        },
+        onPointerMove: (e: ThreeEvent) => {
+          e.stopPropagation();
+          onHover(unit.x, unit.y);
+        },
+      }
+    : {};
+
   return (
-    <group ref={g} position={[wx, y, wz]}>
+    <group ref={g} position={[wx, y, wz]} {...hit}>
       <Piece unit={unit} />
       {/* 체력 바 — 카메라(약 55° 위)를 향해 살짝 눕혀 잘 보이게 */}
       {unit.alive && (

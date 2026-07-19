@@ -7,10 +7,10 @@ import { ChoiceList } from './Menu';
 // 전투 화면의 DOM 오버레이 — 차례 순서·현재 유닛 정보·행동 메뉴·기록.
 // 보드(3D)는 BattleScene이, 판단에 필요한 정보는 전부 여기가 보여 준다.
 
+// 이동·공격은 판을 직접 눌러서 하므로 모드가 없다.
+// 대상을 고르는 회복·아이템만 잠깐 모드로 들어간다.
 export type BattleMode =
-  | { kind: 'idle' } // 행동 메뉴
-  | { kind: 'move' } // 이동할 칸 고르는 중
-  | { kind: 'attack' }
+  | { kind: 'idle' }
   | { kind: 'heal' }
   | { kind: 'item'; itemId: string };
 
@@ -75,11 +75,8 @@ export function ActionMenu({
   state,
   unit,
   mode,
-  canAttack,
   canHeal,
   items,
-  onMove,
-  onAttack,
   onHeal,
   onItem,
   onWait,
@@ -89,11 +86,8 @@ export function ActionMenu({
   state: BattleState;
   unit: Unit;
   mode: BattleMode;
-  canAttack: boolean;
   canHeal: boolean;
   items: Inventory;
-  onMove: () => void;
-  onAttack: () => void;
   onHeal: () => void;
   onItem: (id: string) => void;
   onWait: () => void;
@@ -102,13 +96,7 @@ export function ActionMenu({
 }) {
   if (mode.kind !== 'idle') {
     const hint =
-      mode.kind === 'move'
-        ? '파란 칸을 눌러 이동'
-        : mode.kind === 'attack'
-          ? '붉은 칸의 적을 눌러 공격'
-          : mode.kind === 'heal'
-            ? '아군을 눌러 회복'
-            : `${ITEMS[mode.itemId]?.icon ?? ''} 대상을 누르세요`;
+      mode.kind === 'heal' ? '아군을 눌러 회복' : `${ITEMS[mode.itemId]?.icon ?? ''} 대상을 누르세요`;
     return (
       <div className="action-panel">
         <p className="action-hint">{hint}</p>
@@ -117,11 +105,10 @@ export function ActionMenu({
     );
   }
 
+  // 이동·공격은 판을 직접 누르는 게 기본이라 메뉴에 없다.
+  // 여기 남는 건 '판을 눌러선 뜻이 애매한' 것들뿐.
   const ownedItems = Object.keys(items).filter((id) => (items[id] ?? 0) > 0 && ITEMS[id]);
-  const menu = [
-    { key: 'move', label: '👣 이동', disabled: state.moved, onPick: onMove },
-    { key: 'attack', label: '⚔️ 공격', disabled: !canAttack, onPick: onAttack },
-  ];
+  const menu: { key: string; label: string; disabled: boolean; onPick: () => void }[] = [];
   if (unit.cls === 'staff') {
     menu.push({ key: 'heal', label: '✨ 회복', disabled: !canHeal, onPick: onHeal });
   }
@@ -141,6 +128,9 @@ export function ActionMenu({
 
   return (
     <div className="action-panel">
+      <p className="action-hint dim">
+        {state.moved ? '' : '🔵 칸 = 이동 · '}🔴 적 = 공격 · 우클릭(길게 누르기) = 정보
+      </p>
       <ChoiceList items={menu} />
     </div>
   );
