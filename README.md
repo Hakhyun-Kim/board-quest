@@ -32,4 +32,4 @@ React 18 · TypeScript · Vite · three.js · @react-three/fiber
 
 전투 로직은 렌더와 분리된 **순수 함수**(`src/lib/battle.ts`)라 헤드리스로 자동 검증·밸런스 측정이 가능합니다.
 
-설계 문서: [docs/DESIGN.md](docs/DESIGN.md) · 작업 규약: [CLAUDE.md](CLAUDE.md)
+설계 문서: [docs/DESIGN.md](docs/DESIGN.md) · 앞으로 할 일: [docs/ROADMAP.md](docs/ROADMAP.md) · 작업 규약: [CLAUDE.md](CLAUDE.md)
