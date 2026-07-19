@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="theme-color" content="#131a26" />
+    <title>판 위의 원정대 — 턴제 전술 원정</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Jua&display=swap" rel="stylesheet" />
+  </head>
+  <body>
+    <div id="root"></div>
+    <script>
+      // 개발 검증용: 숨김 탭에서는 rAF가 멈춰 3D가 안 그려지므로 ?rafshim으로 우회 (배포에는 영향 없음)
+      if (new URLSearchParams(location.search).has('rafshim')) {
+        (function () {
+          // 타이머 구동 rAF — 숨김 탭에서는 스로틀되지만 CPU를 점유하지 않는다.
+          // 크롬 집중 스로틀링(분당 1회)까지 걸린 경우를 위해, 검증 스크립트가
+          // window.__pump(n)으로 프레임을 동기 구동할 수 있다 (결정적 스텝 실행).
+          var q = [];
+          var vnow = 0;
+          function runFrame() {
+            vnow += 16.7;
+            var cbs = q;
+            q = [];
+            cbs.forEach(function (cb) {
+              cb(vnow);
+            });
+          }
+          function pump() {
+            runFrame();
+            setTimeout(pump, 16);
+          }
+          setTimeout(pump, 16);
+          window.__pump = function (n) {
+            if (window.__roFlush) window.__roFlush();
+            for (var i = 0; i < (n || 1); i++) runFrame();
+          };
+          window.requestAnimationFrame = function (cb) {
+            q.push(cb);
+            return q.length;
+          };
+          window.cancelAnimationFrame = function () {};
+
+          // 숨김 탭에서는 ResizeObserver 알림도 오지 않아 r3f 캔버스가 부팅하지 못함 → 폴링 폴리필
+          var ROS = [];
+          window.__roFlush = function () {
+            ROS.forEach(function (ro) {
+              if (!ro._els.length) return;
+              var entries = ro._els.map(function (el) {
+                return { target: el, contentRect: el.getBoundingClientRect() };
+              });
+              ro._cb(entries, ro);
+            });
+          };
+          var RO = function (cb) {
+            this._els = [];
+            this._cb = cb;
+            ROS.push(this);
+            var self = this;
+            this._iv = setInterval(function () {
+              if (!self._els.length) return;
+              var entries = self._els.map(function (el) {
+                return { target: el, contentRect: el.getBoundingClientRect() };
+              });
+              self._cb(entries, self);
+            }, 300);
+          };
+          RO.prototype.observe = function (el) {
+            if (this._els.indexOf(el) < 0) this._els.push(el);
+          };
+          RO.prototype.unobserve = function (el) {
+            var i = this._els.indexOf(el);
+            if (i >= 0) this._els.splice(i, 1);
+          };
+          RO.prototype.disconnect = function () {
+            this._els = [];
+            clearInterval(this._iv);
+          };
+          window.ResizeObserver = RO;
+
+          // 완전 헤드리스 페인(뷰포트 0×0)에서도 r3f가 부팅하게 — 요소가 0×0으로
+          // 측정되면 가상 뷰포트(1280×800)로 보고한다.
+          var realGBCR = Element.prototype.getBoundingClientRect;
+          Element.prototype.getBoundingClientRect = function () {
+            var r = realGBCR.call(this);
+            if (r.width === 0 && r.height === 0 && this.isConnected && window.innerWidth === 0) {
+              return {
+                x: 0, y: 0, top: 0, left: 0, right: 1280, bottom: 800,
+                width: 1280, height: 800,
+                toJSON: function () {},
+              };
+            }
+            return r;
+          };
+        })();
+      }
+    </script>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
