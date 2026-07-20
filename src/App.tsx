@@ -44,7 +44,8 @@ import {
   type BattleMode,
 } from './ui/BattleHud';
 import JourneyScreen from './ui/JourneyScreen';
-import TownScreen, { HEAL_COST, PARTY_MAX, RECRUIT_COST } from './ui/TownScreen';
+import { HEAL_COST, PARTY_MAX, RECRUIT_COST, START_GOLD } from './lib/economy';
+import TownScreen from './ui/TownScreen';
 import {
   BattleResultScreen,
   CampScreen,
@@ -58,7 +59,6 @@ import {
 type Phase = 'title' | 'journey' | 'battle' | 'result' | 'town' | 'treasure' | 'camp' | 'ending';
 
 const START_PARTY: ClassId[] = ['sword', 'bow', 'staff'];
-const START_GOLD = 60;
 const RECRUIT_POOL: ClassId[] = ['spear', 'sword', 'bow', 'staff'];
 
 export default function App() {

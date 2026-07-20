@@ -13,8 +13,7 @@
 > 확장 판단 기준 3가지(절차 생성 우선·재미·검증 가능)와 후보 평가는 `docs/DESIGN.md`의 **"확장 방향"** 참조.
 > 각 후보의 착수 방법·건드릴 파일까지 정리한 상세본은 `docs/ROADMAP.md`.
 
-1. **영입 의존도 완화** — 4번째 동료 유무로 난이도가 급변한다(측정: 5단계 3명 37% ↔ 4명 84%). 마을이 길에 안 나오거나 금화가 모자라면 그 원정은 사실상 끝난다. 손볼 후보: 영입가 인하 · 마을 등장 보장 강화 · 3명일 때 적 수 보정.
-1.5. **방향키 칸 커서** — 이동·공격을 메뉴에서 빼면서 키보드 전용 조작이 끊겼다. 커서 칸 + Enter로 `onTile`을 부르면 복구된다(작업 작음).
+1. **방향키 칸 커서** — 이동·공격을 메뉴에서 빼면서 키보드 전용 조작이 끊겼다. 커서 칸 + Enter로 `onTile`을 부르면 복구된다(작업 작음).
 2. **전투 연출 보강** — 이동 경로 따라 미끄러지기, 피격 번쩍·데미지 숫자, 처치 연출, 카메라 살짝 흔들기. (지금은 위치 보간만 있음)
 3. **적 AI 고도화** — 지형 활용(숲·언덕 선점), 집중 공격, 사제 우선 노리기, 후퇴 판단. (지금 적은 특기를 쓰되 자리 싸움은 단순하다)
 5. **지형 상호작용** — 높이차 사거리/피해 보정, 물가 밀어내기, 파괴 가능한 바위.
@@ -49,7 +48,8 @@
 - `src/lib/battle.ts` — **턴 엔진 (순수 함수, 이 게임의 심장)**. 라운드마다 속도 순으로 전원 1회 행동, 한 턴 = 이동(선택) + 행동 1회(공격/회복/아이템/대기). 공격 후 상대 사거리 안이면 **반격 60%**. 지형이 공격·방어를 보정. `createBattle` / `doMove`·`undoMove` / `doAttack` / `doSkill`(특기 — 피해·회복·버프 세 갈래) / `doHeal` / `doItem` / `doWait` / `foeAct`(적 AI — 기본 공격·특기 통합 평가) / `previewDamage`(UI 미리보기와 실제 판정이 같은 식 — 스킬 배수도 같은 함수를 탄다).
   - 특기 조회: `canUseSkill`(배웠고·쿨다운 돌았고·맞을 대상이 있는가) / `skillTargets`(고를 수 있는 적) / `skillVictims`(실제로 맞을 유닛 — 미리보기와 판정이 같은 목록) / `skillAllies`(회복·버프가 닿는 아군).
 - `src/lib/board.ts` — 전투 보드 절차 생성(덩어리 지형: 숲·언덕·물·바위) + **다익스트라 이동 범위**(지형 비용, 적은 통과 불가·아군은 통과 가능하나 정지 불가) + 경로 역추적.
-- `src/lib/journey.ts` — 원정 지도 그래프 절차 생성 (단계별 1~3노드, 인접 단계만 연결, 들어오는 길 없는 노드 방지). 중반 **마을 보장**, 보스 직전 **정비 노드 보장**. 노드 종류: 전투/마을/보물/야영/보스.
+- `src/lib/journey.ts` — 원정 지도 그래프 절차 생성 (단계별 1~3노드, 인접 단계만 연결, 들어오는 길 없는 노드 방지). **출발지에서 실제로 닿는 마을 보장**(지도 어딘가가 아니라 `reachableFrom(0)` 안에, 되도록 이른 단계), 보스 직전 **정비 노드 보장**. 노드 종류: 전투/마을/보물/야영/보스.
+- `src/lib/economy.ts` — **원정 경제 상수 단일 출처** (`START_GOLD`·`HEAL_COST`·`RECRUIT_COST`·`PARTY_MAX`). UI(App·TownScreen)와 시뮬레이터가 공유해 숫자가 갈라지지 않게. 바꾸면 `__bqsim.campaign()`으로 완주율·영입율 재측정.
 - `src/lib/encounter.ts` — 단계(tier)에 맞춰 보드·적 편성·배치 생성. **난이도 곡선의 단일 출처** (적 수·레벨·종류 풀·보상 금화).
   - 여기 숫자는 시뮬레이터로 **측정해서 정한 값**이다. 바꾸면 `__bqsim.campaign({runs:300})`으로 완주율(목표 ≈35%)을 다시 재야 한다.
   - 적 레벨 `1+⌊tier×0.5⌋` · 적 수 최대 5 · 보스는 레벨 보정 없이 호위 2. 이유는 `docs/DESIGN.md`의 "밸런스 측정 · 조정".
@@ -60,7 +60,8 @@
 - `src/lib/items.ts` — 회복약·폭탄(범위)·숫돌(공격 버프). 전투 중 '행동'으로 사용.
 - `src/dev/simBot.ts` — **밸런스 시뮬레이터**(프로덕션 제외). 간이 아군 AI + `foeAct`로 전투를 헤드리스로 굴린다. `runSim`(단계별) / `runSweep`(1~8단계) / `runCampaign`(원정 통째 — 레벨이 실제로 벌려서 오르므로 이쪽이 진짜 난이도). 콘솔 훅 `__bqsim.start/sweep/campaign`.
   - 아군 AI는 `reachableAttacks`·`planAttack`을 그대로 쓴다 — UI가 하이라이트에 쓰는 계산과 **같은 함수**라, 시뮬레이터가 재는 게 실제 플레이와 어긋나지 않는다.
-  - node로도 돌릴 수 있다: `npx esbuild <스크립트>.ts --bundle --platform=node --format=esm --define:import.meta.env.DEV=false` 후 `node`.
+  - `runCampaign`은 실제 지도를 걸어가며(전투·마을·보물·야영), 마을에서 영입·회복까지 흉내 낸다. **영입이 급하면 가장 가까운 마을로 route**(`distToKind`)해 사람이 지도를 보고 움직이는 걸 모사 — 한 걸음 앞만 보면 마을을 못 찾아 영입율을 과소평가한다. 리포트에 `townVisitRate`·`recruitRate`·`clearIfRecruited/Not`을 담아 "왜 3명에 머무는가"를 가른다.
+  - node로도 돌릴 수 있다: `npx esbuild <스크립트>.ts --bundle --platform=node --format=esm --define:import.meta.env.DEV=false` 후 `node`. (판을 많이 돌리면 스택이 얕아 죽을 수 있으니 `--stack-size=4000`)
 - `src/lib/rng.ts` — mulberry32 시드 난수 + `nextRand`(상태를 들고 다니는 순수 난수 — 전투 리플레이 가능).
 - `src/lib/sound.ts` — Web Audio 합성 효과음(파일 0개). 음소거 `bq-muted`.
 - `src/lib/store.ts` — useLocalStorage + `suspendPersistence`(시연·튜토리얼용 저장 격리 스위치). 키 접두사 `bq-`.

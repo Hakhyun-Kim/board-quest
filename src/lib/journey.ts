@@ -86,9 +86,15 @@ export function generateJourney(seed: number, cols = 8): Journey {
     const r = rand();
     n.kind = r < 0.58 ? 'battle' : r < 0.76 ? 'treasure' : r < 0.9 ? 'camp' : 'town';
   }
-  const midCols = middle.filter((n) => n.col >= 2 && n.col <= cols - 3);
-  if (midCols.length && !midCols.some((n) => n.kind === 'town')) {
-    pick(rand, midCols).kind = 'town';
+  // 마을 보장 — 지도 어딘가가 아니라 **출발지에서 실제로 닿는** 마을이 하나는 있어야 한다.
+  // (예전엔 midCols 아무 데나 하나 뒀는데, 갈림길 때문에 그 마을이 안 지나는 길에 놓이면
+  //  그 원정은 영입 기회 없이 끝났다 — 측정: 완주율이 영입 50% ↔ 미영입 0%로 갈렸다.)
+  const reachable = reachableFrom(nodes, 0);
+  const reachableMid = middle.filter((n) => reachable.has(n.id));
+  if (reachableMid.length && !reachableMid.some((n) => n.kind === 'town')) {
+    // 되도록 이른 단계에 둔다 — 일찍 영입할수록 남은 전투를 4명으로 치러 경험치가 붙는다
+    const earliest = Math.min(...reachableMid.map((n) => n.col));
+    pick(rand, reachableMid.filter((n) => n.col === earliest)).kind = 'town';
   }
   // 보스 직전 단계에는 정비 기회를 하나 준다 (마을 또는 야영)
   const preBoss = nodes.filter((n) => n.col === cols - 2);
@@ -98,6 +104,19 @@ export function generateJourney(seed: number, cols = 8): Journey {
 
   nodes[0].visited = true;
   return { seed, cols, nodes, currentId: 0 };
+}
+
+// 출발 노드에서 앞으로 이어진 길로 닿을 수 있는 노드 id 집합
+function reachableFrom(nodes: JourneyNode[], startId: number): Set<number> {
+  const byId = new Map(nodes.map((n) => [n.id, n]));
+  const seen = new Set<number>([startId]);
+  const stack = [startId];
+  while (stack.length) {
+    const n = byId.get(stack.pop()!);
+    if (!n) continue;
+    for (const next of n.next) if (!seen.has(next)) { seen.add(next); stack.push(next); }
+  }
+  return seen;
 }
 
 export const nodeById = (j: Journey, id: number) => j.nodes.find((n) => n.id === id)!;

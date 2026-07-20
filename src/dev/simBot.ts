@@ -24,7 +24,8 @@ import {
   type BattleState,
 } from '../lib/battle';
 import { dist } from '../lib/board';
-import { generateJourney, nextNodes, travelTo, type NodeKind } from '../lib/journey';
+import { HEAL_COST, RECRUIT_COST, START_GOLD } from '../lib/economy';
+import { generateJourney, nextNodes, nodeById, travelTo, type Journey, type NodeKind } from '../lib/journey';
 import { mulberry32 } from '../lib/rng';
 import { battleGold, buildEncounter } from '../lib/encounter';
 import { makeUnit, type ClassId, type Unit } from '../lib/units';
@@ -201,6 +202,28 @@ export interface CampaignReport {
   battles: number; // 총 전투 수
   battleWinRate: number; // 전투 단위 승률 — 완주율은 이 값의 거듭제곱에 가깝다
   avgBattlesPerRun: number;
+  // 영입 진단 — 왜 3명에 머무는가
+  townVisitRate: number; // 마을을 한 번이라도 지난 원정 비율
+  recruitRate: number; // 4번째 동료를 얻은 원정 비율
+  clearIfRecruited: number; // 영입한 원정의 완주율
+  clearIfNot: number; // 영입 못 한 원정의 완주율
+}
+
+// 노드에서 특정 종류(예: 마을)까지의 최단 거리 (앞으로 이어진 길로만, 없으면 -1)
+function distToKind(journey: Journey, fromId: number, kind: NodeKind): number {
+  const seen = new Set<number>([fromId]);
+  let frontier = [fromId];
+  let d = 0;
+  while (frontier.length) {
+    for (const id of frontier) if (nodeById(journey, id).kind === kind) return d;
+    const next: number[] = [];
+    for (const id of frontier)
+      for (const n of nodeById(journey, id).next)
+        if (!seen.has(n)) { seen.add(n); next.push(n); }
+    frontier = next;
+    d++;
+  }
+  return -1;
 }
 
 export function runCampaign(opts: SimOptions & { stages?: number } = {}): CampaignReport {
@@ -216,15 +239,20 @@ export function runCampaign(opts: SimOptions & { stages?: number } = {}): Campai
   let sizeSum = 0;
   let battles = 0;
   let battleWins = 0;
+  let townRuns = 0;
+  let recruitRuns = 0;
+  let clearRecruited = 0;
+  let clearNot = 0;
   const wipeByTier: Record<number, number> = {};
 
   for (let i = 0; i < runs; i++) {
     const seed = seed0 + i * 977;
     let party: Unit[] = partyCls.map((cls, j) => makeUnit(`ally-${j}`, cls, 1, 0, 0));
-    let gold = 60; // START_GOLD
+    let gold = START_GOLD;
     let reached = 0;
     let clearedRun = false;
     let wiped = false;
+    let sawTown = false;
 
     // 실제 지도를 생성해 한 갈래를 걸어간다 — 전투·마을·보물·야영이 섞인
     // 진짜 원정이라야 난이도가 제대로 잰다 (전부 전투로 치면 실제보다 훨씬 가혹하다).
@@ -234,18 +262,22 @@ export function runCampaign(opts: SimOptions & { stages?: number } = {}): Campai
     for (let step = 0; step < stages + 2; step++) {
       const options = nextNodes(journey);
       if (!options.length) break;
-      // 길 고르기 — 다치면 정비 노드를, 아니면 전투를 선호 (사람이 둘 법한 기준)
+      // 길 고르기 — 사람은 지도 전체를 보고 목적지를 향해 route한다. 시뮬도 그래야 공정하다:
+      // 4번째 동료가 없으면 '가장 가까운 마을'로 향하는 갈래를 고른다 (한 걸음 앞만 보지 않게).
       const hurt = party.some((u) => u.hp < u.maxHp * 0.6);
-      const wantRecruit = party.length < 4; // 4번째 동료는 레벨보다 값어치가 크다
-      const score = (k: NodeKind) =>
-        k === 'boss'
-          ? 0
-          : k === 'town' && (wantRecruit || hurt)
-            ? 4
-            : hurt
-              ? k === 'camp' ? 2 : k === 'treasure' ? 1 : 0
-              : k === 'battle' ? 2 : k === 'treasure' ? 1 : 0;
-      const chosen = options.slice().sort((a, b) => score(b.kind) - score(a.kind))[0];
+      const wantRecruit = party.length < 4;
+      const immediate = (k: NodeKind) =>
+        k === 'boss' ? 0 : hurt ? (k === 'town' ? 4 : k === 'camp' ? 2 : k === 'treasure' ? 1 : 0)
+          : k === 'battle' ? 2 : k === 'treasure' ? 1 : 0;
+      let chosen = options.slice().sort((a, b) => immediate(b.kind) - immediate(a.kind))[0];
+      // 영입이 급하면 마을로 가는 최단 갈래를 우선 (한 걸음 앞이 마을이 아니어도)
+      if (wantRecruit) {
+        const toTown = options
+          .map((o) => ({ o, d: distToKind(journey, o.id, 'town') }))
+          .filter((x) => x.d >= 0)
+          .sort((a, b) => a.d - b.d)[0];
+        if (toTown) chosen = toTown.o;
+      }
       journey = travelTo(journey, chosen.id);
       const tier = chosen.col;
       reached = tier;
@@ -261,13 +293,14 @@ export function runCampaign(opts: SimOptions & { stages?: number } = {}): Campai
         continue;
       }
       if (chosen.kind === 'town') {
-        if (party.length < 4 && gold >= 90) {
-          gold -= 90;
+        sawTown = true;
+        if (party.length < 4 && gold >= RECRUIT_COST) {
+          gold -= RECRUIT_COST;
           const lv = Math.max(1, Math.round(party.reduce((a, u) => a + u.level, 0) / party.length));
           party = [...party, makeUnit(`ally-${party.length}`, 'spear', lv, 0, 0)];
         }
-        if (gold >= 30 && party.some((u) => u.hp < u.maxHp)) {
-          gold -= 30;
+        if (gold >= HEAL_COST && party.some((u) => u.hp < u.maxHp)) {
+          gold -= HEAL_COST;
           party = party.map((u) => ({ ...u, hp: u.maxHp }));
         }
         continue;
@@ -305,6 +338,12 @@ export function runCampaign(opts: SimOptions & { stages?: number } = {}): Campai
     tierSum += reached;
     levelSum += party.reduce((a, u) => a + u.level, 0) / party.length;
     sizeSum += party.length;
+    if (sawTown) townRuns++;
+    const recruited = party.length >= 4;
+    if (recruited) {
+      recruitRuns++;
+      if (clearedRun) clearRecruited++;
+    } else if (clearedRun) clearNot++;
   }
 
   return {
@@ -318,6 +357,10 @@ export function runCampaign(opts: SimOptions & { stages?: number } = {}): Campai
     battles,
     battleWinRate: battles ? +(battleWins / battles).toFixed(3) : 0,
     avgBattlesPerRun: +(battles / runs).toFixed(2),
+    townVisitRate: +(townRuns / runs).toFixed(3),
+    recruitRate: +(recruitRuns / runs).toFixed(3),
+    clearIfRecruited: recruitRuns ? +(clearRecruited / recruitRuns).toFixed(3) : 0,
+    clearIfNot: runs - recruitRuns ? +(clearNot / (runs - recruitRuns)).toFixed(3) : 0,
   };
 }
 

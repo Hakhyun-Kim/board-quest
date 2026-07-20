@@ -1,11 +1,11 @@
+import { HEAL_COST, PARTY_MAX, RECRUIT_COST } from '../lib/economy';
 import { ITEMS, type Inventory } from '../lib/items';
 import { CLASSES, type ClassId, type Unit } from '../lib/units';
 import { ChoiceList } from './Menu';
 
 // 마을 — 정비 지점. 회복·물자 구입·동료 영입 후 다시 길을 떠난다.
-export const HEAL_COST = 30;
-export const RECRUIT_COST = 90;
-export const PARTY_MAX = 4;
+// 경제 상수는 src/lib/economy.ts에 모여 있다 (시뮬레이터와 공유).
+export { HEAL_COST, PARTY_MAX, RECRUIT_COST };
 
 export default function TownScreen({
   party,
