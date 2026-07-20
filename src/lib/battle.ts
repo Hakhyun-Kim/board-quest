@@ -140,7 +140,7 @@ function applyDamage(s: BattleState, attacker: Unit, defender: Unit, mul = 1): n
     defender.alive = false;
     s.log.push(`${defender.name} 쓰러짐!`);
     // 아군이 쓰러뜨렸으면 원정대 전체에 경험치
-    if (attacker.side === 'ally') awardExp(s, attacker, 40 + defender.level * 10);
+    if (attacker.side === 'ally') awardExp(s, attacker, 50 + defender.level * 12);
   }
   return dmg;
 }
@@ -245,11 +245,18 @@ export function doPlannedAttack(s0: BattleState, plan: AttackPlan): BattleState 
 export function canUseSkill(s: BattleState, u: Unit): boolean {
   const def = skillOf(u);
   if (!def || u.cd > 0) return false;
-  if (def.healMul) return healTargets(s, u).length > 0;
+  if (def.healMul) return skillAllies(s, u, def).some((t) => t.hp < t.maxHp);
+  if (def.buffAtk) return skillAllies(s, u, def).some((t) => t.id !== u.id); // 몰아칠 부하가 있는가
   return skillTargets(s, u).length > 0;
 }
 
 export const skillOf = (u: Unit): SkillDef | null => (u.skill ? SKILLS[u.skill] : null);
+
+/** 회복·버프가 닿는 아군 (같은 편, 살아 있고, 특기의 아군 사거리 안) */
+export function skillAllies(s: BattleState, u: Unit, def: SkillDef): Unit[] {
+  const r = def.allyRange ?? u.range;
+  return s.units.filter((t) => t.alive && t.side === u.side && dist(u.x, u.y, t.x, t.y) <= r);
+}
 
 /** 특기로 고를 수 있는 대상들 (self형은 실제로 맞을 적들을 돌려준다 — UI 하이라이트용) */
 export function skillTargets(s: BattleState, u: Unit): Unit[] {
@@ -295,10 +302,20 @@ export function doSkill(s0: BattleState, targetId: string | null): BattleState {
   if (def.healMul) {
     const base = CLASSES[u.cls].heal ?? 0;
     const amount = Math.round((base + u.level * 3) * def.healMul);
-    const targets = healTargets(s, u);
+    const targets = skillAllies(s, u, def);
     if (!targets.length || amount <= 0) return s0;
     for (const t of targets) t.hp = Math.min(t.maxHp, t.hp + amount);
     s.log.push(`${def.icon} ${u.name} ${def.name} — 아군 ${targets.length}명 +${amount}`);
+    u.cd = def.cooldown;
+    return endAction(s);
+  }
+
+  // 버프형 (오크 대장 포효) — 사거리 안 '부하'의 공격을 올린다 (자신은 제외 — 부하를 몰아치는 것)
+  if (def.buffAtk) {
+    const targets = skillAllies(s, u, def).filter((t) => t.id !== u.id);
+    if (!targets.length) return s0;
+    for (const t of targets) t.buffAtk += def.buffAtk;
+    s.log.push(`${def.icon} ${u.name} ${def.name} — 부하 ${targets.length}명 공격 +${def.buffAtk}`);
     u.cd = def.cooldown;
     return endAction(s);
   }
@@ -478,8 +495,67 @@ export function advanceTurn(s0: BattleState): BattleState {
   return s;
 }
 
-// ── 적 AI: 이번 턴에 때릴 수 있으면 가장 좋은 표적을 때리고, 없으면 가장 가까운 아군에게 접근.
-// 표적 우선순위: 처치 가능 > 피해량 큼 > 체력 낮음 (후열 정리를 선호)
+// 적이 이번 턴에 할 수 있는 한 수 (이동 자리 + 무엇을 할지 + 점수).
+// 기본 공격과 특기를 같은 점수판에서 비교해, 더 이득인 쪽을 고른다.
+interface FoePlan {
+  x: number;
+  y: number;
+  kind: 'attack' | 'skill';
+  targetId: string | null;
+  score: number;
+}
+
+// 어느 자리에서 특기를 쓰는 게 가장 좋은가 (없으면 null)
+function bestFoeSkill(s: BattleState, u: Unit, tiles: { x: number; y: number }[]): FoePlan | null {
+  const def = skillOf(u);
+  if (!def || u.cd > 0) return null;
+  const enemies = s.units.filter((t) => t.alive && t.side === 'ally');
+  let best: FoePlan | null = null;
+  const keep = (p: FoePlan) => {
+    if (!best || p.score > best.score) best = p;
+  };
+
+  for (const tile of tiles) {
+    const probe = { ...u, x: tile.x, y: tile.y };
+
+    // 버프 (포효) — 사거리 안에 몰아칠 부하가 있을 때만
+    if (def.buffAtk) {
+      const minions = skillAllies(s, probe, def).filter((t) => t.id !== u.id);
+      if (minions.length) keep({ ...tile, kind: 'skill', targetId: null, score: minions.length * def.buffAtk * 1.5 });
+      continue;
+    }
+    // 회복 — 다친 아군을 살리는 값어치
+    if (def.healMul) {
+      const hurt = skillAllies(s, probe, def).filter((t) => t.hp < t.maxHp);
+      if (hurt.length) keep({ ...tile, kind: 'skill', targetId: null, score: hurt.length * 8 });
+      continue;
+    }
+    // 피해형 (강타·저격·회전베기·관통)
+    const r = skillRange(def, u.range);
+    for (const t of enemies) {
+      if (def.area !== 'adjacent' && dist(tile.x, tile.y, t.x, t.y) > r) continue;
+      const victims = skillVictims(s, probe, def.area === 'adjacent' ? null : t);
+      if (!victims.length) continue;
+      let dmg = 0;
+      let kills = 0;
+      for (const v of victims) {
+        const d = baseDamage(s.board, probe, v) * (def.dmgMul ?? 1);
+        dmg += d;
+        if (d >= v.hp) kills++;
+      }
+      const first = victims[0];
+      const counter =
+        !def.noCounter && dist(tile.x, tile.y, first.x, first.y) <= first.range
+          ? baseDamage(s.board, first, probe) * 0.6
+          : 0;
+      keep({ ...tile, kind: 'skill', targetId: t.id, score: kills * 1000 + dmg * 2 - counter + (victims.length - 1) * 4 });
+    }
+  }
+  return best;
+}
+
+// ── 적 AI: 기본 공격·특기 중 이득이 큰 쪽을 골라 (필요하면 이동 후) 쓴다.
+// 없으면 가장 가까운 아군에게 접근. 표적 우선순위: 처치 가능 > 피해량 큼 > 체력 낮음.
 export function foeAct(s0: BattleState): BattleState {
   const s = clone(s0);
   const u = currentUnit(s);
@@ -488,40 +564,38 @@ export function foeAct(s0: BattleState): BattleState {
   const reach = reachable(s.board, s.units, u);
   const enemies = s.units.filter((t) => t.alive && t.side === 'ally');
   if (!enemies.length) return endAction(s);
+  const tiles = [...reach.values()];
 
-  interface Plan {
-    x: number;
-    y: number;
-    target: Unit | null;
-    score: number;
-  }
-  let best: Plan | null = null;
-
-  for (const tile of reach.values()) {
+  // 기본 공격 중 최선
+  let best: FoePlan | null = null;
+  for (const tile of tiles) {
     for (const t of enemies) {
       if (dist(tile.x, tile.y, t.x, t.y) > u.range) continue;
       const probe = { ...u, x: tile.x, y: tile.y };
       const dmg = baseDamage(s.board, probe, t);
       const kill = dmg >= t.hp;
-      // 반격을 맞을 위치인지도 살짝 고려 (원거리 유닛이 굳이 붙지 않게)
       const counter = dist(tile.x, tile.y, t.x, t.y) <= t.range ? baseDamage(s.board, t, probe) * 0.6 : 0;
       const score = (kill ? 1000 : 0) + dmg * 2 - counter - t.hp * 0.1;
-      if (!best || score > best.score) best = { x: tile.x, y: tile.y, target: t, score };
+      if (!best || score > best.score) best = { x: tile.x, y: tile.y, kind: 'attack', targetId: t.id, score };
     }
   }
 
-  if (best && best.target) {
+  // 특기가 더 이득이면 그쪽으로
+  const skill = bestFoeSkill(s, u, tiles);
+  if (skill && (!best || skill.score > best.score)) best = skill;
+
+  if (best) {
     if (best.x !== u.x || best.y !== u.y) {
       u.x = best.x;
       u.y = best.y;
       s.moved = true;
     }
-    return doAttack(s, best.target.id);
+    return best.kind === 'skill' ? doSkill(s, best.targetId) : doAttack(s, best.targetId!);
   }
 
-  // 때릴 수 없으면 가장 가까운 아군 쪽으로 최대한 접근
+  // 아무것도 못 하면 가장 가까운 아군 쪽으로 최대한 접근
   let move: { x: number; y: number; d: number } | null = null;
-  for (const tile of reach.values()) {
+  for (const tile of tiles) {
     const d = Math.min(...enemies.map((t) => dist(tile.x, tile.y, t.x, t.y)));
     if (!move || d < move.d) move = { x: tile.x, y: tile.y, d };
   }

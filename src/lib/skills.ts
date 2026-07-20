@@ -1,11 +1,12 @@
 // 직업별 특기 — 순수 데이터. 판정은 battle.ts의 doSkill이 한다.
+// 아군과 적이 같은 데이터·같은 판정을 쓴다 (도적궁수는 아군 궁수와 저격을 공유).
 //
 // 왜 MP가 아니라 쿨다운인가:
 //  · 자원 관리 UI(마나 바·회복 수단)를 새로 들이지 않아도 된다.
 //  · "지금 쓸까, 아껴 둘까"라는 판단이 라운드 단위로 또렷하게 생긴다.
 //  · 시뮬레이터로 재기 쉽다 — 스킬 사용 빈도가 쿨다운으로 정해지므로.
 
-export type SkillId = 'cleave' | 'snipe' | 'prayer' | 'pierce';
+export type SkillId = 'cleave' | 'snipe' | 'prayer' | 'pierce' | 'roar' | 'smash';
 
 export interface SkillDef {
   id: SkillId;
@@ -26,6 +27,10 @@ export interface SkillDef {
   area?: 'adjacent' | 'pierce';
   /** 사거리 안 아군 전체를 회복 (사제) — 기본 회복량 대비 배수 */
   healMul?: number;
+  /** 사거리 안 아군 전체의 공격을 올린다 (보스 포효) — 올릴 값 */
+  buffAtk?: number;
+  /** 회복·버프처럼 아군에 작용하는 스킬의 사거리 (기본 유닛 사거리와 다를 때) */
+  allyRange?: number;
 }
 
 export const SKILLS: Record<SkillId, SkillDef> = {
@@ -69,6 +74,26 @@ export const SKILLS: Record<SkillId, SkillDef> = {
     target: 'foe',
     dmgMul: 1,
     area: 'pierce',
+  },
+  // ── 적 전용 특기 ──
+  roar: {
+    id: 'roar',
+    name: '포효',
+    icon: '🗣️',
+    desc: '주변 아군의 공격을 끌어올린다 (공격 +3).',
+    cooldown: 3,
+    target: 'self',
+    buffAtk: 3,
+    allyRange: 2,
+  },
+  smash: {
+    id: 'smash',
+    name: '강타',
+    icon: '💥',
+    desc: '한 명을 힘껏 내리친다 (피해 150%).',
+    cooldown: 4,
+    target: 'foe',
+    dmgMul: 1.5,
   },
 };
 

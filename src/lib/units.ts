@@ -66,18 +66,18 @@ export const CLASSES: Record<ClassId, ClassDef> = {
   },
   archer: {
     id: 'archer', name: '도적 궁수', icon: '🎯', side: 'foe',
-    hp: 18, atk: 8, def: 2, move: 3, range: 3, speed: 8,
-    color: '#ffa03d', desc: '멀리서 쏜다. 먼저 잡아야 한다.',
+    hp: 18, atk: 8, def: 2, move: 3, range: 3, speed: 8, skill: 'snipe',
+    color: '#ffa03d', desc: '멀리서 쏜다. 저격을 조심. 먼저 잡아야 한다.',
   },
   orc: {
     id: 'orc', name: '오크', icon: '👹', side: 'foe',
-    hp: 34, atk: 12, def: 5, move: 3, range: 1, speed: 4,
-    color: '#ff5d7e', desc: '느리지만 단단하고 아프다.',
+    hp: 34, atk: 12, def: 5, move: 3, range: 1, speed: 4, skill: 'smash',
+    color: '#ff5d7e', desc: '느리지만 단단하고 아프다. 강타에 주의.',
   },
   warlord: {
     id: 'warlord', name: '오크 대장', icon: '🛡️', side: 'foe',
-    hp: 64, atk: 15, def: 7, move: 3, range: 1, speed: 5,
-    color: '#ff3d5e', desc: '원정의 마지막 벽.',
+    hp: 64, atk: 15, def: 7, move: 3, range: 1, speed: 5, skill: 'roar',
+    color: '#ff3d5e', desc: '원정의 마지막 벽. 부하를 포효로 몰아친다.',
   },
 };
 
