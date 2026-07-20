@@ -62,13 +62,17 @@ export function buildEncounter(
 
   // 적 — 오른쪽 세 열. 수와 레벨이 단계에 비례한다.
   const foes: Unit[] = [];
-  const level = 1 + Math.floor(tier * 0.7);
+  // 적 레벨은 '단계'로 오르는데 아군 레벨은 '치른 전투 수'로 오른다. 실제 지도는 8단계에
+  // 전투가 4~5번뿐이라, 0.7로 올리면 아군이 구조적으로 따라잡을 수 없다 (시뮬레이터 측정).
+  const level = 1 + Math.floor(tier * 0.5);
   if (isBoss) {
     const spot = freeTile(board, placed, rand, board.w - 2, board.w - 1);
-    const boss = makeUnit('foe-boss', 'warlord', level + 1, spot.x, spot.y);
+    // 대장은 기본 스탯부터 오크보다 훨씬 높다(64/15/7). 여기에 레벨 +1과 호위 3까지 붙으면
+    // 같은 단계의 일반 전투가 90%일 때 보스가 5%로 떨어진다 — 벽이 아니라 절벽이었다.
+    const boss = makeUnit('foe-boss', 'warlord', level, spot.x, spot.y);
     placed.push(boss);
     foes.push(boss);
-    const escorts = 3;
+    const escorts = 2;
     for (let i = 0; i < escorts; i++) {
       const cls: ClassId = i % 2 === 0 ? 'orc' : 'archer';
       const s = freeTile(board, placed, rand, board.w - 3, board.w - 1);
@@ -78,7 +82,8 @@ export function buildEncounter(
     }
   } else {
     const pool = foePool(tier);
-    const count = Math.min(6, 2 + Math.floor(tier * 0.6) + (rand() < 0.4 ? 1 : 0));
+    // 아군은 3~4명인데 적이 6이면 수적 열세가 너무 커진다 (측정: 같은 레벨에서도 8단계 승률 15%).
+    const count = Math.min(5, 2 + Math.floor(tier * 0.45) + (rand() < 0.35 ? 1 : 0));
     for (let i = 0; i < count; i++) {
       const cls = pool[Math.floor(rand() * pool.length)];
       const s = freeTile(board, placed, rand, board.w - 3, board.w - 1);

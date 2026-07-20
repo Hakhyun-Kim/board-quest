@@ -114,6 +114,24 @@ export function previewDamage(board: Board, attacker: Unit, defender: Unit, mul 
   return { min: Math.max(1, Math.round(b * 0.9)), max: Math.round(b * 1.1) };
 }
 
+// 처치 경험치를 원정대 전체에 나눈다.
+// 막타를 친 유닛만 받으면 한 명만 크고 나머지가 뒤처져, 원정 후반의 적 레벨을
+// 파티가 통째로 못 따라간다 (시뮬레이터 측정: 완주율 0%). 전열이 몸으로 버는 동안
+// 후열도 같이 크는 게 파티 게임의 상식이기도 하다.
+export const PARTY_EXP_SHARE = 1.0; // 막타를 못 친 동료가 받는 비율
+
+function awardExp(s: BattleState, killer: Unit, base: number) {
+  for (const u of s.units) {
+    if (u.side !== 'ally' || !u.alive) continue;
+    const exp = u.id === killer.id ? base : Math.round(base * PARTY_EXP_SHARE);
+    if (exp <= 0) continue;
+    const { unit, levelUps } = gainExp(u, exp);
+    Object.assign(u, unit);
+    if (levelUps > 0) s.log.push(`${u.name} 레벨 업! (Lv.${u.level})`);
+  }
+  s.exp += base;
+}
+
 function applyDamage(s: BattleState, attacker: Unit, defender: Unit, mul = 1): number {
   const b = baseDamage(s.board, attacker, defender) * mul;
   const dmg = Math.max(1, Math.round(b * (0.9 + roll(s) * 0.2)));
@@ -121,14 +139,8 @@ function applyDamage(s: BattleState, attacker: Unit, defender: Unit, mul = 1): n
   if (defender.hp === 0) {
     defender.alive = false;
     s.log.push(`${defender.name} 쓰러짐!`);
-    // 아군이 쓰러뜨렸으면 경험치
-    if (attacker.side === 'ally') {
-      const exp = 30 + defender.level * 5;
-      const { unit, levelUps } = gainExp(attacker, exp);
-      Object.assign(attacker, unit);
-      s.exp += exp;
-      if (levelUps > 0) s.log.push(`${attacker.name} 레벨 업! (Lv.${attacker.level})`);
-    }
+    // 아군이 쓰러뜨렸으면 원정대 전체에 경험치
+    if (attacker.side === 'ally') awardExp(s, attacker, 40 + defender.level * 10);
   }
   return dmg;
 }

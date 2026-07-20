@@ -150,8 +150,10 @@ export function makeUnit(
   };
 }
 
-// 레벨업에 필요한 경험치 — 레벨당 100 (단순·예측 가능)
-export const expToLevel = (level: number) => level * 100;
+// 레벨업에 필요한 경험치.
+// 원정 하나에 전투는 4~5번뿐인데 적 레벨은 단계마다 오른다. 레벨당 100(누적 Lv6까지 1500)이면
+// 벌 수 있는 경험치로는 절대 못 따라간다 — 시뮬레이터로 재서 누적을 900 수준까지 낮췄다.
+export const expToLevel = (level: number) => 60 + level * 40;
 
 // 경험치를 넣고 레벨업 처리 (최대 체력 증가분은 즉시 회복)
 export function gainExp(u: Unit, exp: number): { unit: Unit; levelUps: number } {

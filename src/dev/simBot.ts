@@ -24,7 +24,9 @@ import {
   type BattleState,
 } from '../lib/battle';
 import { dist } from '../lib/board';
-import { buildEncounter } from '../lib/encounter';
+import { generateJourney, nextNodes, travelTo, type NodeKind } from '../lib/journey';
+import { mulberry32 } from '../lib/rng';
+import { battleGold, buildEncounter } from '../lib/encounter';
 import { makeUnit, type ClassId, type Unit } from '../lib/units';
 
 export interface SimOptions {
@@ -133,7 +135,9 @@ export function runSim(opts: SimOptions = {}): SimReport {
   const runs = opts.runs ?? 100;
   const seed0 = opts.seed ?? 1234;
   const partyCls = opts.party ?? (['sword', 'bow', 'staff'] as ClassId[]);
-  const level = opts.level ?? Math.max(1, Math.round(tier * 0.8));
+  // 기본 아군 레벨은 '실제로 그 단계에 도달했을 때의 레벨'에 맞춘다 (원정 시뮬로 실측한 값).
+  // 여기가 실제와 어긋나면 단계별 승률이 통째로 거짓말이 된다.
+  const level = opts.level ?? Math.max(1, Math.round(1 + tier * 0.45));
   const maxRounds = opts.maxRounds ?? 60;
 
   let wins = 0;
@@ -193,6 +197,10 @@ export interface CampaignReport {
   avgTierReached: number;
   wipeByTier: Record<number, number>; // 어느 단계에서 전멸했나
   avgLevelAtEnd: number;
+  avgPartySize: number; // 끝났을 때 인원 (영입이 실제로 됐는지)
+  battles: number; // 총 전투 수
+  battleWinRate: number; // 전투 단위 승률 — 완주율은 이 값의 거듭제곱에 가깝다
+  avgBattlesPerRun: number;
 }
 
 export function runCampaign(opts: SimOptions & { stages?: number } = {}): CampaignReport {
@@ -205,17 +213,72 @@ export function runCampaign(opts: SimOptions & { stages?: number } = {}): Campai
   let cleared = 0;
   let tierSum = 0;
   let levelSum = 0;
+  let sizeSum = 0;
+  let battles = 0;
+  let battleWins = 0;
   const wipeByTier: Record<number, number> = {};
 
   for (let i = 0; i < runs; i++) {
     const seed = seed0 + i * 977;
     let party: Unit[] = partyCls.map((cls, j) => makeUnit(`ally-${j}`, cls, 1, 0, 0));
+    let gold = 60; // START_GOLD
     let reached = 0;
+    let clearedRun = false;
+    let wiped = false;
 
-    for (let tier = 1; tier <= stages; tier++) {
-      const enc = buildEncounter(seed + tier * 13, tier, party, tier === stages);
+    // 실제 지도를 생성해 한 갈래를 걸어간다 — 전투·마을·보물·야영이 섞인
+    // 진짜 원정이라야 난이도가 제대로 잰다 (전부 전투로 치면 실제보다 훨씬 가혹하다).
+    let journey = generateJourney(seed, stages);
+    const rand = mulberry32(seed * 7919 + 13);
+
+    for (let step = 0; step < stages + 2; step++) {
+      const options = nextNodes(journey);
+      if (!options.length) break;
+      // 길 고르기 — 다치면 정비 노드를, 아니면 전투를 선호 (사람이 둘 법한 기준)
+      const hurt = party.some((u) => u.hp < u.maxHp * 0.6);
+      const wantRecruit = party.length < 4; // 4번째 동료는 레벨보다 값어치가 크다
+      const score = (k: NodeKind) =>
+        k === 'boss'
+          ? 0
+          : k === 'town' && (wantRecruit || hurt)
+            ? 4
+            : hurt
+              ? k === 'camp' ? 2 : k === 'treasure' ? 1 : 0
+              : k === 'battle' ? 2 : k === 'treasure' ? 1 : 0;
+      const chosen = options.slice().sort((a, b) => score(b.kind) - score(a.kind))[0];
+      journey = travelTo(journey, chosen.id);
+      const tier = chosen.col;
+      reached = tier;
+
+      // 전투가 아닌 노드는 보상만 받고 넘어간다 (App.tsx의 resolveNode와 같은 규칙)
+      if (chosen.kind === 'treasure') {
+        gold += 30 + Math.floor(rand() * 25) + tier * 8;
+        continue;
+      }
+      if (chosen.kind === 'camp') {
+        const heal = 18 + tier * 3;
+        party = party.map((u) => ({ ...u, hp: Math.min(u.maxHp, u.hp + heal) }));
+        continue;
+      }
+      if (chosen.kind === 'town') {
+        if (party.length < 4 && gold >= 90) {
+          gold -= 90;
+          const lv = Math.max(1, Math.round(party.reduce((a, u) => a + u.level, 0) / party.length));
+          party = [...party, makeUnit(`ally-${party.length}`, 'spear', lv, 0, 0)];
+        }
+        if (gold >= 30 && party.some((u) => u.hp < u.maxHp)) {
+          gold -= 30;
+          party = party.map((u) => ({ ...u, hp: u.maxHp }));
+        }
+        continue;
+      }
+
+      const isBoss = chosen.kind === 'boss';
+      const enc = buildEncounter(seed + tier * 13, tier, party, isBoss);
       const s0 = createBattle(seed + tier * 31, enc.board, enc.allies, enc.foes, { potion: 2 });
       const { state } = runBattle(s0, maxRounds);
+      battles++;
+      if (state.result === 'win') battleWins++;
 
       // 전투 결과를 원정 상태로 반영 (App.tsx와 같은 규칙: 쓰러진 아군은 체력 1로 부활)
       const after = state.units.filter((u) => u.side === 'ally');
@@ -227,21 +290,21 @@ export function runCampaign(opts: SimOptions & { stages?: number } = {}): Campai
 
       if (state.result !== 'win') {
         wipeByTier[tier] = (wipeByTier[tier] ?? 0) + 1;
+        wiped = true;
         break;
       }
-      reached = tier;
-
-      // 정비 — 야영은 소폭 회복, 3단계마다 마을에서 완전 회복 (지도 생성 규칙의 근사)
-      const camp = tier % 3 === 0;
-      party = party.map((u) => ({
-        ...u,
-        hp: camp ? u.maxHp : Math.min(u.maxHp, u.hp + Math.round(u.maxHp * 0.25)),
-      }));
+      gold += battleGold(tier, isBoss);
+      if (isBoss) {
+        clearedRun = true;
+        break;
+      }
     }
 
-    if (reached >= stages) cleared++;
+    if (clearedRun) cleared++;
+    void wiped;
     tierSum += reached;
     levelSum += party.reduce((a, u) => a + u.level, 0) / party.length;
+    sizeSum += party.length;
   }
 
   return {
@@ -251,6 +314,10 @@ export function runCampaign(opts: SimOptions & { stages?: number } = {}): Campai
     avgTierReached: +(tierSum / runs).toFixed(2),
     wipeByTier,
     avgLevelAtEnd: +(levelSum / runs).toFixed(2),
+    avgPartySize: +(sizeSum / runs).toFixed(2),
+    battles,
+    battleWinRate: battles ? +(battleWins / battles).toFixed(3) : 0,
+    avgBattlesPerRun: +(battles / runs).toFixed(2),
   };
 }
 
