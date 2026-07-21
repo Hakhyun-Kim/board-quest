@@ -8,11 +8,14 @@ export function TitleScreen({
   best,
   muted,
   onStart,
+  onVersus,
   onToggleMute,
 }: {
   best: number;
   muted: boolean;
   onStart: () => void;
+  /** 2인 대전 — 한 지도를 양끝에서 걸어와 마주치면 겨룬다 */
+  onVersus: () => void;
   onToggleMute: () => void;
 }) {
   return (
@@ -27,9 +30,16 @@ export function TitleScreen({
         <p>⚔️ 전투는 큰 판 위의 턴제 — 이동하고, 때리고, 반격을 조심하세요</p>
         <p>🧑‍🤝‍🧑 동료를 모으고 아이템으로 전황을 뒤집습니다</p>
         <p>👑 마지막 단계의 적장을 쓰러뜨리면 원정 성공</p>
+        <p>🧑‍🤝‍🧑 둘이서 대전 — 양끝에서 출발해 마주치면 원정대끼리 겨룹니다</p>
       </div>
       {best > 0 && <p className="best">최고 기록: {best}단계 돌파</p>}
-      <PrimaryButton onPick={onStart}>원정 시작</PrimaryButton>
+      <ChoiceList
+        kind="big"
+        items={[
+          { key: 'solo', label: '🚩 원정 시작 (혼자)', onPick: onStart },
+          { key: 'versus', label: '🧑‍🤝‍🧑 둘이서 대전 (2인)', onPick: onVersus },
+        ]}
+      />
     </div>
   );
 }

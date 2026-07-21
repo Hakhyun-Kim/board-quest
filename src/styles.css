@@ -553,3 +553,121 @@ h2 {
   pointer-events: none;
   font-size: 12px;
 }
+
+/* ── 2인 대전 ── */
+/* 지도 위의 두 진영 말 — 노드 아이콘은 아래에 작게 남겨 종류를 계속 볼 수 있게 */
+.map-node.current.p1 {
+  border-color: #5aa0ff;
+  box-shadow: 0 0 0 3px rgba(90, 160, 255, 0.3);
+}
+
+.map-node.current.p2 {
+  border-color: #ff5d7e;
+  box-shadow: 0 0 0 3px rgba(255, 93, 126, 0.3);
+}
+
+.map-node .node-under {
+  position: absolute;
+  bottom: -6px;
+  right: -6px;
+  font-size: 13px;
+  line-height: 1;
+  background: rgba(12, 18, 30, 0.9);
+  border-radius: 50%;
+  padding: 2px;
+}
+
+.chip.turn-chip-p1 {
+  border-color: #5aa0ff;
+  color: #cfe4ff;
+}
+
+.chip.turn-chip-p2 {
+  border-color: #ff5d7e;
+  color: #ffd3db;
+}
+
+/* 차례 배너 — 핫시트에서 '지금 누가 두는가'가 한눈에 보여야 한다 */
+.turn-banner {
+  align-self: center;
+  margin-top: 6px;
+  padding: 6px 14px;
+  border-radius: 999px;
+  font-size: 15px;
+  font-weight: 700;
+  pointer-events: none;
+  background: rgba(12, 18, 30, 0.85);
+  border: 2px solid #5aa0ff;
+  color: #cfe4ff;
+}
+
+.turn-banner.foe {
+  border-color: #ff5d7e;
+  color: #ffd3db;
+}
+
+/* 담당 배정 화면 */
+.assign-screen h2 {
+  margin: 0;
+}
+
+.assign-groups {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  justify-content: center;
+  width: min(94vw, 720px);
+}
+
+.assign-group {
+  flex: 1 1 260px;
+  min-width: 240px;
+  border: 2px solid #3d4e6e;
+  border-radius: 12px;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: rgba(16, 24, 38, 0.7);
+}
+
+.assign-group.p1 {
+  border-color: #5aa0ff;
+}
+
+.assign-group.p2 {
+  border-color: #ff5d7e;
+}
+
+.assign-head {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.assign-head .chip {
+  cursor: pointer;
+}
+
+.assign-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.choice-btn.assign-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+}
+
+.choice-btn.assign-row em {
+  font-style: normal;
+  opacity: 0.85;
+}
+
+.choice-btn.assign-row.auto {
+  border-color: #8de0e0;
+}

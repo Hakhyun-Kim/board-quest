@@ -21,7 +21,8 @@
 7. **저장/이어하기** — 원정 중간 상태를 localStorage에 (`bq-run`).
 8. **음악** — 절차 생성 BGM(지도/전투/승리). 백층 던전 `music.ts` 패턴 이식.
 9. **바둑·오목식 미니게임** — 마을이나 특수 노드에서 즐기는 판 위 미니게임(원작 영감 회수).
-10. **모바일 최적화** — 터치 타겟 크기, 세로 화면 카메라 맞춤, DPR 제한.
+10. **대전 다듬기** — 조우 직전 예고(상대 편성 엿보기), 진영별 시작 편성 고르기, 3인 이상.
+11. **모바일 최적화** — 터치 타겟 크기, 세로 화면 카메라 맞춤, DPR 제한.
 
 ## 실행
 - `npm install` — 최초 1회
@@ -32,6 +33,7 @@
 ## 검증 (이 프로젝트의 기둥)
 - **전투 로직은 순수 함수** (`src/lib/battle.ts`) — 렌더·React 없이 상태를 굴릴 수 있다. 밸런스는 추측이 아니라 **측정**으로 정한다.
 - **DEV 훅 `window.__bq`** (프로덕션 제외): `phase()` / `state()`(전투 상태) / `journey()` / `party()` / `gold()` / `tile(x,y)`(3D 클릭과 동일 경로) / `travel(nodeId)` / `hover()`(포인터가 마지막으로 읽힌 칸). 3D 레이캐스트를 흉내 내지 않고도 전 플로우를 자동 조작할 수 있다.
+- **DEV 훅 `window.__bqv`** (2인 대전): `phase()` / `versus()`(지도·두 진영·차례) / `state()`(전투) / `pvp()` / `auto()`(자동으로 맡긴 말) / `travel(nodeId)` / `tile(x,y)`.
 - **DEV 훅 `window.__bqProject(x,y)`** — 칸 중심의 화면 좌표(px). `hover()`와 짝지으면 **클릭이 실제로 그 칸에 맞는지**를 자동으로 검증할 수 있다 (칸 → 화면 → 포인터 이벤트 → 칸 왕복). 192칸 전수 검사가 실측 기준.
   - 주의: 언덕·바위는 옆면이 화면 아래로 뻗으므로, 윗면 중심을 그대로 찍으면 실루엣 경계에 걸린다. 검증 시 **10px쯤 아래**를 찍을 것 (사람이 실제로 누르는 위치).
   - 합성 `PointerEvent`로 검증할 땐 `pointerType`·`isPrimary`·`buttons`를 채울 것 — 빠뜨리면 r3f가 무시해 클릭이 안 먹는 것처럼 보인다.
@@ -44,13 +46,18 @@
 **기능별 1파일 원칙** — 화면·오버레이는 `src/ui/`에 기능 단위로 분리해 커밋도 기능 단위로 나눈다. 표시(JSX)는 컴포넌트가, 상태 전이·보상·효과음은 App 콜백이 담당한다.
 **주의:** 자동화(검증 스크립트·향후 시뮬봇)가 DOM 클래스(`.choice-btn`/`.action-panel`/`.map-node`/`.big-btn`)를 셀렉터로 쓰므로 클래스명은 함부로 바꾸지 말 것.
 
-- `src/App.tsx` — phase 상태 머신 + 배선: `title` → `journey`(길 선택) → 노드별 화면(`battle` / `town` / `treasure` / `camp`) → 다시 `journey` … → 보스 노드 승리 시 `ending`. 전투 중 적 차례는 useEffect가 550ms 간격으로 `foeAct`를 돌린다. 전투 종료 시 체력·레벨·경험치·소지품을 원정 상태로 반영.
+- `src/App.tsx` — 1인 원정의 phase 상태 머신 + 배선. 타이틀에서 **2인 대전**을 고르면 `VersusGame`이 통째로 화면을 맡는다. 흐름: `title` → `journey`(길 선택) → 노드별 화면(`battle` / `town` / `treasure` / `camp`) → 다시 `journey` … → 보스 노드 승리 시 `ending`. 전투 화면 자체는 `ui/BattleView.tsx`가 맡는다(적 차례 자동 진행 포함). 전투 종료 시 체력·레벨·경험치·소지품을 원정 상태로 반영.
+- `src/VersusGame.tsx` — **2인 대전 원정**(핫시트). 같은 지도를 양끝에서 마주 보고 진격 → 번갈아 노드를 밟고 각자 성장 → **같은 단계에 서면 조우 → 원정대끼리 대전**. 규칙·상태 전이는 `lib/versus.ts`, 여기는 화면 배선만. DEV 훅 `window.__bqv`.
+- `src/lib/versus.ts` — 대전 원정 규칙 (순수 함수). **좌우 대칭 지도 생성**(왼쪽 절반만 굴리고 `mirror(col,row)=(cols-1-col,row)`로 거울) · `prevNodes`(2P는 지도를 거꾸로 걷는다) · `choicesFor` · `tierFor`(양쪽이 같은 난이도 곡선) · `moveCamp`(조우 판정) · `passTurn`.
+  - 대칭인 이유: 만나기 전 각자 3노드뿐인데 종류가 운으로 갈리면 승부가 지도로 정해진다. 바꾸면 `src/dev/checkVersusMap.ts`로 재검증.
+- `src/lib/autoPlay.ts` — **봇이 두는 한 수** (`allyAct` / 진영 분기 `autoAct`). 원래 시뮬레이터 전용이었는데 대전의 '자동 담당'이 같은 판단을 필요로 해 lib으로 올렸다 — **시뮬레이터가 재는 수와 봇이 두는 수가 같아야** 측정이 실제와 어긋나지 않는다.
 - `src/lib/battle.ts` — **턴 엔진 (순수 함수, 이 게임의 심장)**. 라운드마다 속도 순으로 전원 1회 행동, 한 턴 = 이동(선택) + 행동 1회(공격/회복/아이템/대기). 공격 후 상대 사거리 안이면 **반격 60%**. 지형이 공격·방어를 보정. `createBattle` / `doMove`·`undoMove` / `doAttack` / `doSkill`(특기 — 피해·회복·버프 세 갈래) / `doHeal` / `doItem` / `doWait` / `foeAct`(적 AI — 기본 공격·특기 통합 평가) / `previewDamage`(UI 미리보기와 실제 판정이 같은 식 — 스킬 배수도 같은 함수를 탄다).
+  - **소지품은 진영별**(`items: Record<Side, Inventory>`) — 대전에서 양쪽이 각자 모은 물자로 싸운다. 1인 원정은 `sideItems(inventory)`로 감싸 넘긴다.
   - 특기 조회: `canUseSkill`(배웠고·쿨다운 돌았고·맞을 대상이 있는가) / `skillTargets`(고를 수 있는 적) / `skillVictims`(실제로 맞을 유닛 — 미리보기와 판정이 같은 목록) / `skillAllies`(회복·버프가 닿는 아군).
 - `src/lib/board.ts` — 전투 보드 절차 생성(덩어리 지형: 숲·언덕·물·바위) + **다익스트라 이동 범위**(지형 비용, 적은 통과 불가·아군은 통과 가능하나 정지 불가) + 경로 역추적.
 - `src/lib/journey.ts` — 원정 지도 그래프 절차 생성 (단계별 1~3노드, 인접 단계만 연결, 들어오는 길 없는 노드 방지). **출발지에서 실제로 닿는 마을 보장**(지도 어딘가가 아니라 `reachableFrom(0)` 안에, 되도록 이른 단계), 보스 직전 **정비 노드 보장**. 노드 종류: 전투/마을/보물/야영/보스.
 - `src/lib/economy.ts` — **원정 경제 상수 단일 출처** (`START_GOLD`·`HEAL_COST`·`RECRUIT_COST`·`PARTY_MAX`). UI(App·TownScreen)와 시뮬레이터가 공유해 숫자가 갈라지지 않게. 바꾸면 `__bqsim.campaign()`으로 완주율·영입율 재측정.
-- `src/lib/encounter.ts` — 단계(tier)에 맞춰 보드·적 편성·배치 생성. **난이도 곡선의 단일 출처** (적 수·레벨·종류 풀·보상 금화).
+- `src/lib/encounter.ts` — 단계(tier)에 맞춰 보드·적 편성·배치 생성. `buildVersusEncounter`는 두 원정대를 마주 앉힌다(2P는 엔진상 `foe` 쪽). **난이도 곡선의 단일 출처** (적 수·레벨·종류 풀·보상 금화).
   - 여기 숫자는 시뮬레이터로 **측정해서 정한 값**이다. 바꾸면 `__bqsim.campaign({runs:300})`으로 완주율(목표 ≈35%)을 다시 재야 한다.
   - 적 레벨 `1+⌊tier×0.5⌋` · 적 수 최대 5 · 보스는 레벨 보정 없이 호위 2. 이유는 `docs/DESIGN.md`의 "밸런스 측정 · 조정".
 - `src/lib/units.ts` — 직업 9종(아군 4: 검사·궁수·사제·창병 / 적 5: 고블린·늑대·도적궁수·오크·오크대장) 스탯·성장·경험치. 아군 직업은 `skill`을, 유닛은 `cd`(남은 쿨다운)를 들고 다닌다.
@@ -58,6 +65,7 @@
   - **쿨다운은 그 유닛의 차례가 돌아올 때 1씩 준다** (라운드 넘어갈 때가 아니라). 라운드 끝에 쓴 느린 유닛이 곧바로 1을 돌려받아 속도에 따라 실제 대기가 달라지던 문제 때문.
   - **적 특기와 아군 특기는 같은 `SKILLS`·같은 `doSkill`을 탄다.** `foeAct`가 기본 공격과 특기를 한 점수판에서 비교해 이득이 큰 쪽을 고른다. 단, `snipe`는 아군 궁수와 적 도적궁수가 **공유**하므로 한쪽만 조정할 수 없다 — 저격 수치를 바꾸면 양쪽이 같이 움직인다.
 - `src/lib/items.ts` — 회복약·폭탄(범위)·숫돌(공격 버프). 전투 중 '행동'으로 사용.
+- `src/dev/checkVersusMap.ts` — 대전 지도 전수 검증(300개): 종류·간선 대칭, 양방향 막다른 길 없음, 조우 전 마을 보장, 양끝 출발지. `npx esbuild src/dev/checkVersusMap.ts --bundle --platform=node --format=esm --define:import.meta.env.DEV=false --outfile=/tmp/c.mjs && node /tmp/c.mjs`
 - `src/dev/simBot.ts` — **밸런스 시뮬레이터**(프로덕션 제외). 간이 아군 AI + `foeAct`로 전투를 헤드리스로 굴린다. `runSim`(단계별) / `runSweep`(1~8단계) / `runCampaign`(원정 통째 — 레벨이 실제로 벌려서 오르므로 이쪽이 진짜 난이도). 콘솔 훅 `__bqsim.start/sweep/campaign`.
   - 아군 AI는 `reachableAttacks`·`planAttack`을 그대로 쓴다 — UI가 하이라이트에 쓰는 계산과 **같은 함수**라, 시뮬레이터가 재는 게 실제 플레이와 어긋나지 않는다.
   - `runCampaign`은 실제 지도를 걸어가며(전투·마을·보물·야영), 마을에서 영입·회복까지 흉내 낸다. **영입이 급하면 가장 가까운 마을로 route**(`distToKind`)해 사람이 지도를 보고 움직이는 걸 모사 — 한 걸음 앞만 보면 마을을 못 찾아 영입율을 과소평가한다. 리포트에 `townVisitRate`·`recruitRate`·`clearIfRecruited/Not`을 담아 "왜 3명에 머무는가"를 가른다.
@@ -70,11 +78,13 @@
   - **행동은 포인터를 뗄 때** 일어난다(`beginPress`/`endPress`). 우클릭은 즉시 정보, **450ms 이상 길게 누르면 정보**(행동 안 함), 다른 칸에서 떼면 취소 — 터치에서도 오조작 없이 적을 살펴볼 수 있게.
   - 쓰러진 말은 핸들러를 달지 않아 레이가 통과한다 (그 칸으로 이동하는 클릭을 막지 않도록).
 - `src/three/Piece.tsx` — 말(유닛) — 직업별 실루엣을 절차 지오메트리로만 표현.
+- `src/ui/BattleView.tsx` — **전투 화면 통째** (보드 3D + HUD + 조작 + 봇 자동 진행). 1인 원정과 2인 대전이 **같은 화면을 쓴다** — 차이는 `canControl(unit)` 하나뿐이라, '적 차례 자동 진행'과 '봇에게 맡긴 아군'이 한 갈래로 처리된다. `turnLabel`을 주면 「🔵 1P 차례」 배너가 뜬다.
+- `src/ui/AssignScreen.tsx` — 전투 시작 전 **담당 배정** (말 단위로 사람 ↔ 🤖자동, 진영 통째로도). 설정은 유지되므로 이후엔 「전투 시작」만 누르면 된다.
 - `src/ui/Menu.tsx` — **표준 메뉴 선택 UI** (아래 규약 참조).
 - `src/ui/BattleHud.tsx` — 차례 순서 바 · 유닛 카드 · **행동 메뉴** · 표적 미리보기(예상 피해·반격) · 전투 기록.
   - **이동·공격은 메뉴에 없다** — 판을 직접 누르는 게 기본. `BattleMode`에는 대상을 골라야 하는 `heal`·`skill`·`item`만 남는다.
   - 특기는 메뉴에 있다(눌러선 뜻이 애매하므로). 대상이 필요 없는 것(회전베기·기도)은 **누르면 즉시 발동**, 대상이 필요한 것(저격·관통)만 `skill` 모드로 들어간다.
-- `src/ui/JourneyScreen.tsx` — 원정 지도(SVG 길 + 노드 버튼 + 키보드 선택지).
+- `src/ui/JourneyScreen.tsx` — 원정 지도(SVG 길 + 노드 버튼 + 키보드 선택지). 대전에서는 `activeId`·`choiceIds`·`markers`를 밖에서 넣어 **두 진영 말**을 함께 세운다.
 - `src/ui/TownScreen.tsx` — 마을(회복·물자 구입·동료 영입).
 - `src/ui/Screens.tsx` — 타이틀·전투 결과·보물·야영·엔딩.
 

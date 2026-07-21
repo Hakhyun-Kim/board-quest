@@ -10,20 +10,12 @@
 import {
   createBattle,
   currentUnit,
-  doMove,
-  doPlannedAttack,
-  doSkill,
   doWait,
   foeAct,
-  healTargets,
-  movesFor,
-  reachableAttacks,
-  skillOf,
-  skillTargets,
-  canUseSkill,
+  sideItems,
   type BattleState,
 } from '../lib/battle';
-import { dist } from '../lib/board';
+import { allyAct } from '../lib/autoPlay';
 import { HEAL_COST, RECRUIT_COST, START_GOLD } from '../lib/economy';
 import { generateJourney, nextNodes, nodeById, travelTo, type Journey, type NodeKind } from '../lib/journey';
 import { mulberry32 } from '../lib/rng';
@@ -53,64 +45,8 @@ export interface SimReport {
   avgHpLeft: number; // 승리 시 남은 아군 체력 비율 (0~1) — 여유가 얼마나 있었나
 }
 
-// ── 아군 AI (간이) — 사람이 둘 법한 무난한 수를 둔다.
-// 목적은 '최적 플레이'가 아니라 '일관된 기준'이다. 같은 기준으로 전후를 비교해야
-// 밸런스 변화가 보인다.
-export function allyAct(s0: BattleState): BattleState {
-  const u = currentUnit(s0);
-  if (!u || u.side !== 'ally') return s0;
-
-  // 1) 특기가 확실히 이득일 때 쓴다
-  if (canUseSkill(s0, u)) {
-    const def = skillOf(u);
-    if (def) {
-      if (def.healMul) {
-        // 기도 — 아군 둘 이상이 다쳤을 때만 (혼자 살짝 깎인 정도면 아낀다)
-        const hurt = healTargets(s0, u).filter((t) => t.hp < t.maxHp * 0.7).length;
-        if (hurt >= 2) return doSkill(s0, null);
-      } else if (def.area === 'adjacent') {
-        // 회전베기 — 인접한 적이 둘 이상이면
-        if (skillTargets(s0, u).length >= 2) return doSkill(s0, null);
-      } else {
-        // 저격·관통 — 닿는 적이 있으면 가장 약한 쪽에
-        const targets = skillTargets(s0, u);
-        if (targets.length) {
-          const t = targets.slice().sort((a, b) => a.hp - b.hp)[0];
-          return doSkill(s0, t.id);
-        }
-      }
-    }
-  }
-
-  // 2) 때릴 수 있으면 가장 이득인 표적을 (이동 후 공격 포함)
-  const plans = [...reachableAttacks(s0, u).values()];
-  if (plans.length) {
-    const best = plans
-      .map((p) => {
-        const t = s0.units.find((x) => x.id === p.targetId)!;
-        const kill = p.dmg >= t.hp;
-        return { p, score: (kill ? 1000 : 0) + p.dmg * 2 - p.counter * 1.5 - t.hp * 0.1 };
-      })
-      .sort((a, b) => b.score - a.score)[0];
-    return doPlannedAttack(s0, best.p);
-  }
-
-  // 3) 못 때리면 가장 가까운 적 쪽으로 접근
-  const foes = s0.units.filter((t) => t.alive && t.side === 'foe');
-  if (foes.length && !s0.moved) {
-    let best: { x: number; y: number; d: number } | null = null;
-    for (const tile of movesFor(s0, u).values()) {
-      const d = Math.min(...foes.map((f) => dist(tile.x, tile.y, f.x, f.y)));
-      if (!best || d < best.d) best = { x: tile.x, y: tile.y, d };
-    }
-    if (best && (best.x !== u.x || best.y !== u.y)) {
-      // 접근만 하고 턴을 넘긴다
-      const moved = doMove(s0, best.x, best.y);
-      if (moved !== s0) return doWait(moved);
-    }
-  }
-  return doWait(s0);
-}
+// 아군 AI는 lib/autoPlay.ts로 옮겼다 — 대전의 '봇 담당'과 시뮬레이터가 같은 수를 두게 하려고.
+export { allyAct };
 
 /** 전투 한 판을 끝까지 굴린다 */
 export function runBattle(s0: BattleState, maxRounds = 60) {
@@ -153,7 +89,7 @@ export function runSim(opts: SimOptions = {}): SimReport {
     const seed = seed0 + i * 977;
     const party: Unit[] = partyCls.map((cls, j) => makeUnit(`ally-${j}`, cls, level, 0, 0));
     const enc = buildEncounter(seed, tier, party, !!opts.boss);
-    const s0 = createBattle(seed, enc.board, enc.allies, enc.foes, { potion: 2 });
+    const s0 = createBattle(seed, enc.board, enc.allies, enc.foes, sideItems({ potion: 2 }));
     const { state, skillUses: su } = runBattle(s0, maxRounds);
 
     skillUses += su;
@@ -308,7 +244,7 @@ export function runCampaign(opts: SimOptions & { stages?: number } = {}): Campai
 
       const isBoss = chosen.kind === 'boss';
       const enc = buildEncounter(seed + tier * 13, tier, party, isBoss);
-      const s0 = createBattle(seed + tier * 31, enc.board, enc.allies, enc.foes, { potion: 2 });
+      const s0 = createBattle(seed + tier * 31, enc.board, enc.allies, enc.foes, sideItems({ potion: 2 }));
       const { state } = runBattle(s0, maxRounds);
       battles++;
       if (state.result === 'win') battleWins++;

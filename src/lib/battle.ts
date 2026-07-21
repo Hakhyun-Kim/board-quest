@@ -19,9 +19,15 @@ import {
 import { ITEMS, useItem, type Inventory } from './items';
 import { nextRand } from './rng';
 import { SKILLS, skillRange, type SkillDef } from './skills';
-import { CLASSES, gainExp, type Unit } from './units';
+import { CLASSES, gainExp, type Side, type Unit } from './units';
 
 export type BattleResult = 'win' | 'lose' | null;
+
+/** 진영별 소지품 — 대전(PvP)에서는 양쪽이 각자 모은 물자로 싸운다 */
+export type SideItems = Record<Side, Inventory>;
+
+/** 한쪽만 소지품을 들고 있는 보통 전투(원정)용 */
+export const sideItems = (ally: Inventory, foe: Inventory = {}): SideItems => ({ ally, foe });
 
 export interface BattleState {
   board: Board;
@@ -32,7 +38,7 @@ export interface BattleState {
   seed: number; // 판정용 난수 상태 (리플레이 가능)
   log: string[];
   result: BattleResult;
-  items: Inventory; // 전투 중 소지품 (끝나면 원정 상태로 반영)
+  items: SideItems; // 전투 중 소지품 — 진영별 (끝나면 원정 상태로 반영)
   moved: boolean; // 현재 유닛이 이번 턴에 이동했는지
   startPos: { x: number; y: number } | null; // 이동 취소용 원위치
   exp: number; // 이번 전투에서 아군이 얻은 총 경험치 (결과 화면용)
@@ -43,7 +49,7 @@ const clone = (s: BattleState): BattleState => ({
   units: s.units.map((u) => ({ ...u })),
   order: [...s.order],
   log: [...s.log],
-  items: { ...s.items },
+  items: { ally: { ...s.items.ally }, foe: { ...s.items.foe } },
   startPos: s.startPos ? { ...s.startPos } : null,
 });
 
@@ -73,7 +79,7 @@ export function createBattle(
   board: Board,
   allies: Unit[],
   foes: Unit[],
-  items: Inventory,
+  items: SideItems,
 ): BattleState {
   const units = [...allies, ...foes].map((u) => ({ ...u, acted: false, buffAtk: 0, cd: 0 }));
   const s: BattleState = {
@@ -407,7 +413,7 @@ export function doItem(s0: BattleState, itemId: string, targetId: string): Battl
   const u = currentUnit(s);
   const t = s.units.find((x) => x.id === targetId);
   const def = ITEMS[itemId];
-  if (!u || !t || !def || !t.alive || (s.items[itemId] ?? 0) <= 0) return s0;
+  if (!u || !t || !def || !t.alive || (s.items[u.side][itemId] ?? 0) <= 0) return s0;
   if (dist(u.x, u.y, t.x, t.y) > def.range) return s0;
 
   if (def.heal) {
@@ -436,7 +442,7 @@ export function doItem(s0: BattleState, itemId: string, targetId: string): Battl
     }
     s.log.push(`${def.icon} ${def.name} — ${t.name} 에게 ${def.damage} 피해`);
   }
-  s.items = useItem(s.items, itemId);
+  s.items = { ...s.items, [u.side]: useItem(s.items[u.side], itemId) };
   return endAction(s);
 }
 

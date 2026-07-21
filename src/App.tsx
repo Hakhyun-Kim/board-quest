@@ -1,27 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Canvas } from '@react-three/fiber';
-import BattleScene, { type Highlights } from './three/BattleScene';
-import {
-  canUseSkill,
-  createBattle,
-  currentUnit,
-  doHeal,
-  doItem,
-  doMove,
-  doPlannedAttack,
-  doSkill,
-  doWait,
-  foeAct,
-  healTargets,
-  itemTargets,
-  movesFor,
-  reachableAttacks,
-  skillOf,
-  skillTargets,
-  undoMove,
-  type BattleState,
-} from './lib/battle';
-import { key, unitAt } from './lib/board';
+import { createBattle, sideItems, type BattleState } from './lib/battle';
 import { battleGold, buildEncounter } from './lib/encounter';
 import { addItem, ITEMS, type Inventory } from './lib/items';
 import {
@@ -35,17 +13,11 @@ import { mulberry32, pick } from './lib/rng';
 import { isMuted, setMuted, sfx } from './lib/sound';
 import { useLocalStorage } from './lib/store';
 import { CLASSES, makeUnit, type ClassId, type Unit } from './lib/units';
-import {
-  ActionMenu,
-  BattleLog,
-  TargetPreview,
-  TurnOrderBar,
-  UnitCard,
-  type BattleMode,
-} from './ui/BattleHud';
+import BattleView from './ui/BattleView';
 import JourneyScreen from './ui/JourneyScreen';
 import { HEAL_COST, PARTY_MAX, RECRUIT_COST, START_GOLD } from './lib/economy';
 import TownScreen from './ui/TownScreen';
+import VersusGame from './VersusGame';
 import {
   BattleResultScreen,
   CampScreen,
@@ -68,9 +40,7 @@ export default function App() {
   const [gold, setGold] = useState(START_GOLD);
   const [inventory, setInventory] = useState<Inventory>({ potion: 2 });
   const [battle, setBattle] = useState<BattleState | null>(null);
-  const [mode, setMode] = useState<BattleMode>({ kind: 'idle' });
-  const [inspectId, setInspectId] = useState<string | null>(null);
-  const [hoverId, setHoverId] = useState<string | null>(null); // 마우스가 올라간 말 (터치엔 없음)
+  const [versus, setVersus] = useState(false); // 2인 대전 모드 (VersusGame이 통째로 맡는다)
   const [reward, setReward] = useState({ gold: 0, exp: 0, item: null as string | null, heal: 0 });
   const [best, setBest] = useLocalStorage<number>('bq-best', 0);
   const [muted, setMutedState] = useState(isMuted());
@@ -112,9 +82,7 @@ export default function App() {
       sfx.turn();
       const isBoss = kind === 'boss';
       const enc = buildEncounter(j.seed + nodeId, tier, party, isBoss);
-      setBattle(createBattle(j.seed + nodeId * 7, enc.board, enc.allies, enc.foes, inventory));
-      setMode({ kind: 'idle' });
-      setInspectId(null);
+      setBattle(createBattle(j.seed + nodeId * 7, enc.board, enc.allies, enc.foes, sideItems(inventory)));
       setPhase('battle');
     } else if (kind === 'town') {
       sfx.coin();
@@ -138,19 +106,6 @@ export default function App() {
     }
   };
 
-  // ── 전투: 적 차례는 자동으로 진행
-  useEffect(() => {
-    if (phase !== 'battle' || !battle || battle.result) return;
-    const u = currentUnit(battle);
-    if (!u) return;
-    if (u.side !== 'foe') return;
-    const t = setTimeout(() => {
-      setBattle((s) => (s && !s.result && currentUnit(s)?.side === 'foe' ? foeAct(s) : s));
-      sfx.hit();
-    }, 550);
-    return () => clearTimeout(t);
-  }, [phase, battle]);
-
   // ── 전투 종료 → 결과 화면
   useEffect(() => {
     if (phase !== 'battle' || !battle?.result) return;
@@ -167,7 +122,7 @@ export default function App() {
           return { ...u, hp: b.alive ? b.hp : 1, level: b.level, exp: b.exp, atk: b.atk, def: b.def, maxHp: b.maxHp, speed: b.speed };
         }),
       );
-      setInventory(battle.items);
+      setInventory(battle.items.ally);
       const node = journey ? nodeById(journey, journey.currentId) : null;
       const isBoss = node?.kind === 'boss';
       const g = win ? battleGold(node?.col ?? 1, isBoss) : 0;
@@ -179,120 +134,8 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phase, battle?.result]);
 
-  const unit = battle ? currentUnit(battle) : null;
-  const isAllyTurn = !!unit && unit.side === 'ally' && !battle?.result;
-
-  // 이번 턴에 때릴 수 있는 적 전부 (이동해서 닿는 것 포함) — 하이라이트와 클릭이 같은 계획을 쓴다
-  const plans = useMemo(
-    () => (battle && unit && isAllyTurn ? reachableAttacks(battle, unit) : new Map()),
-    [battle, unit, isAllyTurn],
-  );
-
-  // ── 하이라이트 (이동 파랑 / 지금 칠 수 있는 적 빨강 / 이동해야 닿는 적 주황)
-  const highlights: Highlights = useMemo(() => {
-    const empty: Highlights = {
-      move: new Set(),
-      target: new Set(),
-      threat: new Set(),
-      path: new Set(),
-    };
-    if (!battle || !unit || !isAllyTurn) return empty;
-    if (mode.kind === 'heal') {
-      return { ...empty, target: new Set(healTargets(battle, unit).map((t) => key(t.x, t.y))) };
-    }
-    if (mode.kind === 'skill') {
-      return { ...empty, target: new Set(skillTargets(battle, unit).map((t) => key(t.x, t.y))) };
-    }
-    if (mode.kind === 'item') {
-      return {
-        ...empty,
-        target: new Set(itemTargets(battle, unit, mode.itemId).map((t) => key(t.x, t.y))),
-      };
-    }
-    // idle — 갈 수 있는 칸(파랑) + 지금 칠 수 있는 적(빨강) + 이동하면 닿는 적(주황).
-    //        "저기까지 가서 때릴 수 있나"를 손으로 세어 보지 않아도 되게 미리 칠해 준다.
-    const m = new Set<string>();
-    if (!battle.moved) movesFor(battle, unit).forEach((t) => m.add(key(t.x, t.y)));
-    const now = new Set<string>();
-    const after = new Set<string>();
-    for (const [id, p] of plans) {
-      const t = battle.units.find((x) => x.id === id);
-      if (!t) continue;
-      (p.moves ? after : now).add(key(t.x, t.y));
-    }
-    return { ...empty, move: m, target: now, threat: after };
-  }, [battle, unit, mode, isAllyTurn, plans]);
-
-  // ── 보드 클릭
-  const onTile = useCallback(
-    (x: number, y: number) => {
-      if (!battle || battle.result) return;
-      const u = currentUnit(battle);
-      if (!u || u.side !== 'ally') return;
-      const target = unitAt(battle.units, x, y);
-
-      if (mode.kind === 'skill') {
-        if (target && skillTargets(battle, u).some((t) => t.id === target.id)) {
-          setBattle(doSkill(battle, target.id));
-          setMode({ kind: 'idle' });
-          setInspectId(null);
-          sfx.hit();
-        } else sfx.cancel();
-        return;
-      }
-      if (mode.kind === 'heal' && target && target.side === u.side) {
-        setBattle(doHeal(battle, target.id));
-        setMode({ kind: 'idle' });
-        sfx.heal();
-        return;
-      }
-      if (mode.kind === 'item' && target) {
-        const ok = itemTargets(battle, u, mode.itemId).some((t) => t.id === target.id);
-        if (ok) {
-          setBattle(doItem(battle, mode.itemId, target.id));
-          setMode({ kind: 'idle' });
-          sfx.item();
-        } else sfx.cancel();
-        return;
-      }
-      // ── idle — 메뉴를 거치지 않는 직접 조작이 기본이다.
-      //    적을 누르면 곧장 공격, 파란 칸을 누르면 곧장 이동.
-      if (target && target.side !== u.side) {
-        const plan = plans.get(target.id);
-        if (plan) {
-          // 이동이 필요하면 이동까지 한 번에 — 일일이 옮겨 놓고 확인할 필요 없게
-          if (plan.moves) sfx.move();
-          setBattle(doPlannedAttack(battle, plan));
-          setInspectId(null);
-          sfx.hit();
-        } else {
-          // 이번 턴엔 닿지 않는다 — 때리는 대신 정보만
-          setInspectId(target.id);
-          sfx.cancel();
-        }
-        return;
-      }
-      if (!target && !battle.moved && movesFor(battle, u).has(key(x, y))) {
-        setBattle(doMove(battle, x, y));
-        sfx.move();
-        return;
-      }
-      // 그 외(아군·빈 칸 밖) — 정보 확인
-      setInspectId(target ? target.id : null);
-    },
-    [battle, mode, plans],
-  );
-
-  // 우클릭 — 행동하지 않고 상세 정보만 (오조작 없이 적을 살펴볼 수 있게)
-  const onInspectTile = useCallback(
-    (x: number, y: number) => {
-      if (!battle) return;
-      const target = unitAt(battle.units, x, y);
-      setInspectId(target ? target.id : null);
-      if (target) sfx.select();
-    },
-    [battle],
-  );
+  // 1인 원정에서는 아군만 사람이 조작한다 (적은 BattleView 안에서 봇이 둔다)
+  const canControl = useCallback((u: Unit) => u.side === 'ally', []);
 
   // ── 마을 행동
   const townHeal = () => {
@@ -337,25 +180,14 @@ export default function App() {
     else setPhase('journey');
   };
 
-  const lastHover = useRef<[number, number] | null>(null); // 검증용 — 포인터가 어느 칸으로 읽혔나
-  const onHoverTile = useCallback(
-    (x: number, y: number | null) => {
-      lastHover.current = y === null ? null : [x, y];
-      if (!battle || y === null) return setHoverId(null);
-      setHoverId(unitAt(battle.units, x, y)?.id ?? null);
-    },
-    [battle],
-  );
-
-  // 고정(우클릭)이 우선, 없으면 마우스가 올라간 말을 보여 준다 —
-  // 덕분에 적 위에 커서만 올려도 예상 피해를 미리 볼 수 있다.
-  const shownId = inspectId ?? hoverId;
-  const inspectUnit = battle && shownId ? battle.units.find((u) => u.id === shownId) : null;
+  // 검증용 — 보드 클릭과 '포인터가 어느 칸으로 읽혔나'를 BattleView에서 받아 둔다
+  const lastHover = useRef<[number, number] | null>(null);
+  const tileRef = useRef<(x: number, y: number) => void>(() => {});
 
   // ── 개발 검증용 훅 (프로덕션 번들 제외) — 브라우저 자동화·밸런스 시뮬레이터의 진입점.
   //    3D 클릭을 흉내 내지 않고 tile(x,y)로 같은 경로를 태울 수 있다.
-  const devRef = useRef({ battle, journey, party, gold, phase, onTile, travel });
-  devRef.current = { battle, journey, party, gold, phase, onTile, travel };
+  const devRef = useRef({ battle, journey, party, gold, phase, travel });
+  devRef.current = { battle, journey, party, gold, phase, travel };
   useEffect(() => {
     if (!import.meta.env.DEV) return;
     // 밸런스 시뮬레이터 — 콘솔에서 __bqsim.sweep()
@@ -367,7 +199,7 @@ export default function App() {
       party: () => devRef.current.party,
       gold: () => devRef.current.gold,
       /** 보드 칸 클릭 (3D 레이캐스트와 동일 경로) */
-      tile: (x: number, y: number) => devRef.current.onTile(x, y),
+      tile: (x: number, y: number) => tileRef.current(x, y),
       /** 원정 지도에서 노드로 이동 */
       travel: (id: number) => devRef.current.travel(id),
       /** 포인터가 마지막으로 읽힌 칸 — 레이캐스트 정확도 검증용 */
@@ -375,114 +207,39 @@ export default function App() {
     };
   }, []);
 
+  if (versus) {
+    return (
+      <div className="app">
+        <VersusGame muted={muted} onToggleMute={toggleMute} onExit={() => setVersus(false)} />
+      </div>
+    );
+  }
+
   return (
     <div className="app">
       {phase === 'battle' && battle && (
-        <>
-          <Canvas
-            className="canvas"
-            camera={{ fov: 50, position: [0, 18, 13] }}
-            dpr={[1, 2]}
-            onContextMenu={(e) => e.preventDefault()} // 우클릭은 '정보 보기'로 쓴다
-          >
-            <color attach="background" args={['#131a26']} />
-            <BattleScene
-              state={battle}
-              highlights={highlights}
-              onTile={onTile}
-              onInspect={onInspectTile}
-              onHover={onHoverTile}
-            />
-          </Canvas>
-
-          <div className="battle-ui">
-            <div className="battle-top">
-              <TurnOrderBar state={battle} />
-              <button className="chip mute-btn" onClick={toggleMute}>
-                {muted ? '🔇' : '🔊'}
-              </button>
-            </div>
-
-            <div className="battle-side">
-              {unit && <UnitCard unit={unit} state={battle} />}
-              {inspectUnit && unit && inspectUnit.id !== unit.id && (
-                <>
-                  <UnitCard unit={inspectUnit} state={battle} />
-                  {inspectUnit.side !== unit.side &&
-                    (() => {
-                      // 이동해서 때릴 상대면, 실제로 설 자리 기준으로 미리 본다
-                      // (언덕·숲 보정이 달라지므로 제자리 기준으로 보여 주면 수치가 어긋난다)
-                      const p = mode.kind === 'idle' ? plans.get(inspectUnit.id) : undefined;
-                      const from = p ? { ...unit, x: p.x, y: p.y } : unit;
-                      return (
-                        <TargetPreview
-                          state={battle}
-                          attacker={from}
-                          target={inspectUnit}
-                          skill={mode.kind === 'skill' ? skillOf(unit) : null}
-                          movesFirst={!!p?.moves}
-                        />
-                      );
-                    })()}
-                </>
-              )}
-              <BattleLog log={battle.log} />
-            </div>
-
-            <div className="battle-bottom">
-              {isAllyTurn && unit ? (
-                <ActionMenu
-                  state={battle}
-                  unit={unit}
-                  mode={mode}
-                  canHeal={unit.cls === 'staff' && healTargets(battle, unit).length > 0}
-                  canSkill={canUseSkill(battle, unit)}
-                  items={battle.items}
-                  onSkill={() => {
-                    // 대상을 고를 필요가 없는 특기(회전베기·기도)는 바로 발동한다
-                    const def = skillOf(unit);
-                    sfx.select();
-                    if (def && def.target === 'self') {
-                      setBattle(doSkill(battle, null));
-                      setMode({ kind: 'idle' });
-                    } else {
-                      setMode({ kind: 'skill' });
-                    }
-                  }}
-                  onHeal={() => {
-                    sfx.select();
-                    setMode({ kind: 'heal' });
-                  }}
-                  onItem={(id) => {
-                    sfx.select();
-                    setMode({ kind: 'item', itemId: id });
-                  }}
-                  onWait={() => {
-                    sfx.tap();
-                    setBattle(doWait(battle));
-                    setMode({ kind: 'idle' });
-                  }}
-                  onUndo={() => {
-                    sfx.cancel();
-                    setBattle(undoMove(battle));
-                  }}
-                  onCancel={() => {
-                    sfx.cancel();
-                    setMode({ kind: 'idle' });
-                  }}
-                />
-              ) : (
-                <p className="waiting">
-                  {battle.result ? '전투 종료…' : `${unit?.name ?? '적'}의 차례…`}
-                </p>
-              )}
-            </div>
-          </div>
-        </>
+        <BattleView
+          state={battle}
+          setState={setBattle as (s: BattleState | ((p: BattleState) => BattleState)) => void}
+          canControl={canControl}
+          muted={muted}
+          onToggleMute={toggleMute}
+          tileRef={tileRef}
+          hoverRef={lastHover}
+        />
       )}
 
       {phase === 'title' && (
-        <TitleScreen best={best} muted={muted} onStart={startRun} onToggleMute={toggleMute} />
+        <TitleScreen
+          best={best}
+          muted={muted}
+          onStart={startRun}
+          onVersus={() => {
+            sfx.march();
+            setVersus(true);
+          }}
+          onToggleMute={toggleMute}
+        />
       )}
 
       {phase === 'journey' && journey && (

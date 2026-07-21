@@ -96,6 +96,27 @@ export function buildEncounter(
   return { board, allies, foes };
 }
 
+// 대전(PvP) 판 — 두 원정대가 마주 선다.
+// 엔진은 진영을 ally/foe 두 쪽으로만 보므로, 오른쪽 진영(2P)은 side를 foe로 바꿔 앉힌다.
+// 조작하는 사람이 누구인지는 엔진이 알 필요가 없다 (App이 담당자를 따로 들고 있다).
+export function buildVersusEncounter(seed: number, left: Unit[], right: Unit[]): Encounter {
+  const rand = mulberry32(seed * 69069 + 977);
+  const board = generateBoard(seed + 7);
+  const placed: Unit[] = [];
+
+  const seat = (party: Unit[], side: 'ally' | 'foe', x0: number, x1: number) =>
+    party.map((u) => {
+      const spot = freeTile(board, placed, rand, x0, x1);
+      const unit: Unit = { ...u, side, x: spot.x, y: spot.y, acted: false, buffAtk: 0, cd: 0 };
+      placed.push(unit);
+      return unit;
+    });
+
+  const allies = seat(left, 'ally', 0, 1);
+  const foes = seat(right, 'foe', board.w - 2, board.w - 1);
+  return { board, allies, foes };
+}
+
 // 전투 보상 — 단계에 비례한 금화 (경험치는 전투 중 처치로 즉시 지급)
 export const battleGold = (tier: number, isBoss: boolean) =>
   Math.round((25 + tier * 12) * (isBoss ? 3 : 1));
